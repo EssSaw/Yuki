@@ -22,13 +22,12 @@ not a successful 9router or Unity runtime connection.
 
 ## Latest state and next action
 
-Documentation links/whitespace and staged diff checks passed. Local initial commit:
-`ef599c5`. HTTPS push failed because credentials could not be prompted; nothing was
-pushed and dev was not created. Origin is configured. The user reauthorized agent
-commits/pushes using the configured identity. A repeat push of master also failed
-because HTTPS credentials are unavailable noninteractively. Local main does not
-exist, explaining `src refspec main does not match any`; publish master instead.
-Resume dev creation only after master publication succeeds.
+Documentation links/whitespace and staged diff checks passed. Initial documentation
+commit: `ef599c5`; updated commit authorization: `71e21e2`. After the user signed in,
+master publication succeeded and dev was created/pushed. Both remote refs were
+verified at `71e21e2` before this handoff update. Current development branch: dev,
+tracking origin/dev. Existing remote main and the original license remain untouched.
+The user authorizes focused, verified agent commits/pushes using the configured identity.
 
 User accepted incremental implementation, but desktop stack remains open: background
 resource efficiency is a priority. Compare a WebView-based shell with alternatives;
