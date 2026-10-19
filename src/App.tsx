@@ -38,7 +38,7 @@ function App() {
           ))}
           <p className="theme-description">{themeMode === "Auto" ? "Follows your workspace." : "Locked to your choice."} Session only.</p>
         </fieldset>
-        <div className="sidebar-foot"><span className="status-dot" />Design preview<small>Local shell. No background AI activity.</small></div>
+        <div className="sidebar-foot"><span className="status-dot" />Your local workspace<small>AI runs only when you ask.</small></div>
       </aside>
       <main>
         <header className="topbar"><span>{section}</span><span className="connection">9router</span></header>

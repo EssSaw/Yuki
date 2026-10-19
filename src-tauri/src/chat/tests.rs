@@ -166,6 +166,101 @@ async fn test_http_client_redirect_policy_none() {
 // ---------------------------------------------------------------------------
 
 #[test]
+fn test_sse_parser_finish_reason_stop_without_done() {
+    let mut parser = SseParser::new();
+    let chunk1 = "data: {\"choices\":[{\"delta\":{\"content\":\"Hello world\"}}]}\n\n";
+    let events1 = parser.feed(chunk1);
+    assert_eq!(events1, vec![ParsedEvent::Delta("Hello world".to_string())]);
+
+    // Terminal chunk with finish_reason: "stop" and NO [DONE]
+    let chunk2 = "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n";
+    let events2 = parser.feed(chunk2);
+    assert_eq!(events2, vec![ParsedEvent::Done]);
+}
+
+#[test]
+fn test_sse_parser_finish_reason_with_delta_in_same_chunk() {
+    let mut parser = SseParser::new();
+    // Delta and finish_reason in the exact same chunk
+    let chunk = "data: {\"choices\":[{\"delta\":{\"content\":\"Final delta.\"},\"finish_reason\":\"stop\"}]}\n\n";
+    let events = parser.feed(chunk);
+    assert_eq!(
+        events,
+        vec![
+            ParsedEvent::Delta("Final delta.".to_string()),
+            ParsedEvent::Done
+        ]
+    );
+}
+
+#[test]
+fn test_sse_parser_finish_reason_in_tail_buffer_without_newline() {
+    let mut parser = SseParser::new();
+    // Incomplete line without trailing newline when stream ends
+    let chunk =
+        "data: {\"choices\":[{\"delta\":{\"content\":\"Tail text\"},\"finish_reason\":\"stop\"}]}";
+    let fed = parser.feed(chunk);
+    assert!(fed.is_empty()); // Buffered
+
+    let finished = parser.finish();
+    assert_eq!(
+        finished,
+        vec![
+            ParsedEvent::Delta("Tail text".to_string()),
+            ParsedEvent::Done
+        ]
+    );
+}
+
+#[test]
+fn test_sse_parser_finish_reason_split_across_chunks() {
+    let mut parser = SseParser::new();
+    let p1 = "data: {\"choices\":[{\"delta\":{},\"finish_";
+    let p2 = "reason\":\"stop\"}]}\n\n";
+
+    assert!(parser.feed(p1).is_empty());
+    assert_eq!(parser.feed(p2), vec![ParsedEvent::Done]);
+}
+
+#[test]
+fn test_sse_parser_valid_and_invalid_finish_reasons() {
+    let mut parser = SseParser::new();
+
+    // Standard and compatible completion reasons should yield Done
+    for reason in [
+        "stop",
+        "length",
+        "tool_calls",
+        "content_filter",
+        "function_call",
+        "done",
+        "end_turn",
+        "stop_sequence",
+        "eos",
+        "STOP",
+    ] {
+        let chunk = format!(
+            "data: {{\"choices\":[{{\"delta\":{{}},\"finish_reason\":\"{reason}\"}}]}}\n\n"
+        );
+        let events = parser.feed(&chunk);
+        assert_eq!(
+            events,
+            vec![ParsedEvent::Done],
+            "Failed for reason: {reason}"
+        );
+    }
+
+    // Explicit error finish reason should yield Error event
+    let err_chunk = "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"error\"}]}\n\n";
+    let err_events = parser.feed(err_chunk);
+    assert!(matches!(err_events.first(), Some(ParsedEvent::Error(_))));
+
+    // Null or empty finish_reason should NOT yield Done
+    let null_chunk = "data: {\"choices\":[{\"delta\":{},\"finish_reason\":null}]}\n\n";
+    assert!(parser.feed(null_chunk).is_empty());
+}
+
+#[test]
 fn test_sse_parser_standard_and_done() {
     let mut parser = SseParser::new();
     let chunk1 = "data: {\"choices\":[{\"delta\":{\"content\":\"Hello\"}}]}\n\n";
@@ -685,7 +780,12 @@ async fn test_execute_chat_stream_cancellation_mid_stream() {
     });
 
     // Wait for the first delta to arrive
-    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    for _ in 0..100 {
+        if !sink.get_events().is_empty() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
 
     // Trigger cancellation
     state.cancel_request(req_id);
@@ -799,4 +899,358 @@ async fn test_execute_chat_stream_server_error_sanitization() {
 
     // 3. Verify active request guard is freed
     assert!(state.try_start_request("req-after-err", &conv_id).is_ok());
+}
+
+#[tokio::test]
+async fn test_execute_chat_stream_finish_reason_without_done_succeeds() {
+    let env = TestEnv::new("stream_finish_reason");
+    let data_root = env.data_root();
+
+    let conv_id = uuid::Uuid::new_v4().to_string();
+    let user_msg = ChatMessage {
+        id: uuid::Uuid::new_v4().to_string(),
+        role: MessageRole::User,
+        content: "What is the capital of France?".to_string(),
+        status: MessageStatus::Complete,
+    };
+    let initial_conv = ConversationDetail {
+        id: conv_id.clone(),
+        title: "Capital of France".to_string(),
+        updated_at: "2026-10-19T10:00:00Z".to_string(),
+        messages: vec![user_msg],
+    };
+    save_conversation_atomic(&data_root, &initial_conv).unwrap();
+
+    // Start mock streaming SSE server that sends finish_reason: "stop" without [DONE]
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+
+    tokio::spawn(async move {
+        if let Ok((mut socket, _)) = listener.accept().await {
+            let mut buf = [0u8; 1024];
+            let _ = socket.read(&mut buf).await;
+
+            let chunk1 = "data: {\"choices\":[{\"delta\":{\"content\":\"Paris\"}}]}\n\n";
+            let chunk2 = "data: {\"choices\":[{\"delta\":{\"content\":\" is the capital.\"},\"finish_reason\":\"stop\"}]}\n\n";
+
+            let header = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n";
+            let _ = socket.write_all(header.as_bytes()).await;
+
+            for c in [chunk1, chunk2] {
+                let chunk_header = format!("{:X}\r\n{}\r\n", c.len(), c);
+                let _ = socket.write_all(chunk_header.as_bytes()).await;
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+            // Close stream without [DONE]
+            let _ = socket.write_all(b"0\r\n\r\n").await;
+        }
+    });
+
+    let store = MockSecretStore::new();
+    let state = ChatState::new(store);
+    let req_id = "req-stream-finish-reason";
+
+    let cancel_rx = state
+        .try_start_request(req_id, &conv_id)
+        .expect("Should acquire active lock");
+
+    let sink = TestEventSink::new();
+    let base_url = format!("http://{addr}/v1");
+
+    super::commands::execute_chat_stream(
+        sink.clone(),
+        state.clone(),
+        data_root.clone(),
+        conv_id.clone(),
+        req_id.to_string(),
+        base_url,
+        "test-model".to_string(),
+        None,
+        initial_conv.messages.clone(),
+        cancel_rx,
+    )
+    .await;
+
+    // 1. Verify stream events
+    let events = sink.get_events();
+    assert!(!events.is_empty());
+
+    let deltas: Vec<String> = events.iter().filter_map(|e| e.delta.clone()).collect();
+    assert_eq!(
+        deltas,
+        vec!["Paris".to_string(), " is the capital.".to_string()]
+    );
+
+    let terminal_events: Vec<&super::models::ChatStreamPayload> =
+        events.iter().filter(|e| e.done == Some(true)).collect();
+    assert_eq!(terminal_events.len(), 1);
+    assert_eq!(terminal_events[0].status, Some(MessageStatus::Complete));
+    assert_eq!(terminal_events[0].error, None);
+
+    // 2. Verify persisted conversation on disk
+    let loaded = load_conversation_from_disk(&data_root, &conv_id).unwrap();
+    assert_eq!(loaded.messages.len(), 2);
+    let assistant_msg = &loaded.messages[1];
+    assert_eq!(assistant_msg.role, MessageRole::Assistant);
+    assert_eq!(assistant_msg.content, "Paris is the capital.");
+    assert_eq!(assistant_msg.status, MessageStatus::Complete);
+}
+
+#[tokio::test]
+async fn test_execute_chat_stream_premature_eof_fails() {
+    let env = TestEnv::new("stream_premature_eof");
+    let data_root = env.data_root();
+
+    let conv_id = uuid::Uuid::new_v4().to_string();
+    let user_msg = ChatMessage {
+        id: uuid::Uuid::new_v4().to_string(),
+        role: MessageRole::User,
+        content: "Hello".to_string(),
+        status: MessageStatus::Complete,
+    };
+    let initial_conv = ConversationDetail {
+        id: conv_id.clone(),
+        title: "Hello".to_string(),
+        updated_at: "2026-10-19T10:00:00Z".to_string(),
+        messages: vec![user_msg],
+    };
+    save_conversation_atomic(&data_root, &initial_conv).unwrap();
+
+    // Mock server sends partial delta, then closes abruptly without finish_reason or [DONE]
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+
+    tokio::spawn(async move {
+        if let Ok((mut socket, _)) = listener.accept().await {
+            let mut buf = [0u8; 1024];
+            let _ = socket.read(&mut buf).await;
+
+            let chunk1 =
+                "data: {\"choices\":[{\"delta\":{\"content\":\"Incomplete thought...\"}}]}\n\n";
+
+            let header = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n";
+            let _ = socket.write_all(header.as_bytes()).await;
+
+            let chunk_header = format!("{:X}\r\n{}\r\n", chunk1.len(), chunk1);
+            let _ = socket.write_all(chunk_header.as_bytes()).await;
+            // Close stream immediately: premature EOF
+            let _ = socket.write_all(b"0\r\n\r\n").await;
+        }
+    });
+
+    let store = MockSecretStore::new();
+    let state = ChatState::new(store);
+    let req_id = "req-stream-premature-eof";
+
+    let cancel_rx = state
+        .try_start_request(req_id, &conv_id)
+        .expect("Should acquire active lock");
+
+    let sink = TestEventSink::new();
+    let base_url = format!("http://{addr}/v1");
+
+    super::commands::execute_chat_stream(
+        sink.clone(),
+        state.clone(),
+        data_root.clone(),
+        conv_id.clone(),
+        req_id.to_string(),
+        base_url,
+        "test-model".to_string(),
+        None,
+        initial_conv.messages.clone(),
+        cancel_rx,
+    )
+    .await;
+
+    // 1. Verify partial delta was emitted
+    let events = sink.get_events();
+    let deltas: Vec<String> = events.iter().filter_map(|e| e.delta.clone()).collect();
+    assert_eq!(deltas, vec!["Incomplete thought...".to_string()]);
+
+    // 2. Verify premature EOF was NOT turned into success: marked Failed with specific error
+    let terminal_events: Vec<&super::models::ChatStreamPayload> =
+        events.iter().filter(|e| e.done == Some(true)).collect();
+    assert_eq!(terminal_events.len(), 1);
+    assert_eq!(terminal_events[0].status, Some(MessageStatus::Failed));
+    assert_eq!(
+        terminal_events[0].error,
+        Some("Stream ended before completion was confirmed.".to_string())
+    );
+
+    // 3. Verify saved message on disk is marked Failed
+    let loaded = load_conversation_from_disk(&data_root, &conv_id).unwrap();
+    assert_eq!(loaded.messages.len(), 2);
+    let assistant_msg = &loaded.messages[1];
+    assert_eq!(assistant_msg.status, MessageStatus::Failed);
+    assert_eq!(assistant_msg.content, "Incomplete thought...");
+}
+
+#[tokio::test]
+async fn test_execute_chat_stream_finish_reason_with_done_succeeds() {
+    let env = TestEnv::new("stream_finish_and_done");
+    let data_root = env.data_root();
+
+    let conv_id = uuid::Uuid::new_v4().to_string();
+    let user_msg = ChatMessage {
+        id: uuid::Uuid::new_v4().to_string(),
+        role: MessageRole::User,
+        content: "Hello".to_string(),
+        status: MessageStatus::Complete,
+    };
+    let initial_conv = ConversationDetail {
+        id: conv_id.clone(),
+        title: "Hello".to_string(),
+        updated_at: "2026-10-19T10:00:00Z".to_string(),
+        messages: vec![user_msg],
+    };
+    save_conversation_atomic(&data_root, &initial_conv).unwrap();
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+
+    tokio::spawn(async move {
+        if let Ok((mut socket, _)) = listener.accept().await {
+            let mut buf = [0u8; 1024];
+            let _ = socket.read(&mut buf).await;
+
+            let chunk1 = "data: {\"choices\":[{\"delta\":{\"content\":\"Hello world\"}}]}\n\n";
+            let chunk2 = "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n";
+            let chunk3 = "data: [DONE]\n\n";
+
+            let header = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n";
+            let _ = socket.write_all(header.as_bytes()).await;
+
+            for c in [chunk1, chunk2, chunk3] {
+                let chunk_header = format!("{:X}\r\n{}\r\n", c.len(), c);
+                let _ = socket.write_all(chunk_header.as_bytes()).await;
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+            let _ = socket.write_all(b"0\r\n\r\n").await;
+        }
+    });
+
+    let store = MockSecretStore::new();
+    let state = ChatState::new(store);
+    let req_id = "req-stream-finish-and-done";
+
+    let cancel_rx = state
+        .try_start_request(req_id, &conv_id)
+        .expect("Should acquire active lock");
+
+    let sink = TestEventSink::new();
+    let base_url = format!("http://{addr}/v1");
+
+    super::commands::execute_chat_stream(
+        sink.clone(),
+        state.clone(),
+        data_root.clone(),
+        conv_id.clone(),
+        req_id.to_string(),
+        base_url,
+        "test-model".to_string(),
+        None,
+        initial_conv.messages.clone(),
+        cancel_rx,
+    )
+    .await;
+
+    let events = sink.get_events();
+    let terminal_events: Vec<&super::models::ChatStreamPayload> =
+        events.iter().filter(|e| e.done == Some(true)).collect();
+    assert_eq!(terminal_events.len(), 1);
+    assert_eq!(terminal_events[0].status, Some(MessageStatus::Complete));
+    assert_eq!(terminal_events[0].error, None);
+
+    let loaded = load_conversation_from_disk(&data_root, &conv_id).unwrap();
+    assert_eq!(loaded.messages.len(), 2);
+    assert_eq!(loaded.messages[1].status, MessageStatus::Complete);
+    assert_eq!(loaded.messages[1].content, "Hello world");
+}
+
+#[tokio::test]
+async fn test_execute_chat_stream_explicit_error_in_stream_fails() {
+    let env = TestEnv::new("stream_explicit_err");
+    let data_root = env.data_root();
+
+    let conv_id = uuid::Uuid::new_v4().to_string();
+    let user_msg = ChatMessage {
+        id: uuid::Uuid::new_v4().to_string(),
+        role: MessageRole::User,
+        content: "Compute".to_string(),
+        status: MessageStatus::Complete,
+    };
+    let initial_conv = ConversationDetail {
+        id: conv_id.clone(),
+        title: "Compute".to_string(),
+        updated_at: "2026-10-19T10:00:00Z".to_string(),
+        messages: vec![user_msg],
+    };
+    save_conversation_atomic(&data_root, &initial_conv).unwrap();
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+
+    tokio::spawn(async move {
+        if let Ok((mut socket, _)) = listener.accept().await {
+            let mut buf = [0u8; 1024];
+            let _ = socket.read(&mut buf).await;
+
+            let chunk1 = "data: {\"choices\":[{\"delta\":{\"content\":\"Partial answer\"}}]}\n\n";
+            let chunk2 = "data: {\"error\":{\"message\":\"Upstream backend overloaded\"}}\n\n";
+
+            let header = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n";
+            let _ = socket.write_all(header.as_bytes()).await;
+
+            for c in [chunk1, chunk2] {
+                let chunk_header = format!("{:X}\r\n{}\r\n", c.len(), c);
+                let _ = socket.write_all(chunk_header.as_bytes()).await;
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+            let _ = socket.write_all(b"0\r\n\r\n").await;
+        }
+    });
+
+    let store = MockSecretStore::new();
+    let state = ChatState::new(store);
+    let req_id = "req-stream-explicit-err";
+
+    let cancel_rx = state
+        .try_start_request(req_id, &conv_id)
+        .expect("Should acquire active lock");
+
+    let sink = TestEventSink::new();
+    let base_url = format!("http://{addr}/v1");
+
+    super::commands::execute_chat_stream(
+        sink.clone(),
+        state.clone(),
+        data_root.clone(),
+        conv_id.clone(),
+        req_id.to_string(),
+        base_url,
+        "test-model".to_string(),
+        None,
+        initial_conv.messages.clone(),
+        cancel_rx,
+    )
+    .await;
+
+    let events = sink.get_events();
+    let terminal_events: Vec<&super::models::ChatStreamPayload> =
+        events.iter().filter(|e| e.done == Some(true)).collect();
+    assert_eq!(terminal_events.len(), 1);
+    assert_eq!(terminal_events[0].status, Some(MessageStatus::Failed));
+    assert!(terminal_events[0].error.is_some());
+    assert!(
+        terminal_events[0]
+            .error
+            .as_ref()
+            .unwrap()
+            .contains("Upstream backend overloaded")
+    );
+
+    let loaded = load_conversation_from_disk(&data_root, &conv_id).unwrap();
+    assert_eq!(loaded.messages.len(), 2);
+    assert_eq!(loaded.messages[1].status, MessageStatus::Failed);
 }

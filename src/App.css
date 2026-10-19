@@ -12,6 +12,11 @@
   box-sizing: border-box;
 }
 
+html,
+body {
+  height: 100%;
+}
+
 body {
   margin: 0;
   min-width: 360px;
@@ -115,7 +120,9 @@ textarea:focus-visible {
 .workspace {
   display: grid;
   grid-template-columns: 280px 1fr;
-  min-height: 100vh;
+  height: 100vh;
+  max-height: 100vh;
+  overflow: hidden;
   background: var(--bg-base);
   color: var(--ink);
   transition: background-color 0.25s ease, color 0.25s ease;
@@ -124,12 +131,28 @@ textarea:focus-visible {
 .sidebar {
   background: var(--sidebar-bg);
   border-right: 1px solid var(--line);
-  padding: 32px 18px 24px;
+  padding: 24px 16px 20px;
   display: flex;
   flex-direction: column;
   position: relative;
   isolation: isolate;
+  height: 100vh;
+  max-height: 100vh;
+  overflow-y: auto;
+  overflow-x: hidden;
+  box-sizing: border-box;
+  scrollbar-width: thin;
+  scrollbar-color: var(--line) transparent;
   transition: background-color 0.25s ease, border-color 0.25s ease;
+}
+
+.sidebar::-webkit-scrollbar {
+  width: 5px;
+}
+
+.sidebar::-webkit-scrollbar-thumb {
+  background: var(--line);
+  border-radius: 999px;
 }
 
 .brand {
@@ -169,9 +192,9 @@ textarea:focus-visible {
 .brand small {
   display: block;
   font-family: var(--font-body);
-  font-size: 9px;
+  font-size: 11px;
   font-weight: 600;
-  letter-spacing: 0.16em;
+  letter-spacing: 0.12em;
   margin-top: 2px;
   color: var(--muted);
   text-transform: uppercase;
@@ -179,11 +202,11 @@ textarea:focus-visible {
 
 .nav-label {
   font-family: var(--font-body);
-  font-size: 11px;
+  font-size: 11.5px;
   font-weight: 600;
-  letter-spacing: 0.14em;
+  letter-spacing: 0.12em;
   color: var(--muted);
-  margin: 32px 6px 12px;
+  margin: 24px 6px 10px;
   display: flex;
   align-items: center;
   gap: 10px;
@@ -353,51 +376,58 @@ nav button[aria-current] .nav-number {
 }
 
 .theme-controls {
-  margin: 28px 0 0;
-  padding: 14px 12px 12px;
+  margin: 18px 0 0;
+  padding: 8px 10px 10px;
   border: 1px solid var(--line);
   background: var(--card-bg);
-  border-radius: 12px 14px 12px 14px;
-  box-shadow: 0 2px 8px -2px var(--shadow-wash);
+  border-radius: 12px;
+  box-shadow: 0 2px 6px -2px var(--shadow-wash);
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 4px;
+  align-items: center;
   position: relative;
   transition: background-color 0.25s ease, border-color 0.25s ease, box-shadow 0.25s ease;
 }
 
 .theme-legend {
+  grid-column: 1 / -1;
   font-family: var(--font-body);
-  font-size: 10px;
+  font-size: 10.5px;
   font-weight: 600;
-  letter-spacing: 0.12em;
+  letter-spacing: 0.1em;
   text-transform: uppercase;
   color: var(--accent);
   background: var(--sidebar-bg);
   border: 1px solid var(--line);
-  border-radius: 8px;
-  padding: 2px 8px;
+  border-radius: 6px;
+  padding: 2px 7px;
+  margin-bottom: 6px;
 }
 
 .theme-option {
   position: relative;
   isolation: isolate;
   width: 100%;
-  margin-bottom: 6px;
-  padding: 8px 12px;
+  margin-bottom: 0;
+  padding: 6px 4px;
   border: 1px solid var(--line);
   background: var(--bg-surface);
   color: var(--ink);
   font-family: var(--font-body);
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 500;
-  text-align: left;
-  border-radius: 8px 10px 8px 10px;
+  text-align: center;
+  justify-content: center;
+  border-radius: 7px;
   cursor: pointer;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  transition: transform 0.16s cubic-bezier(0.2, 0.9, 0.3, 1),
+  transition: transform 0.14s cubic-bezier(0.2, 0.9, 0.3, 1),
               border-color 0.14s ease,
               color 0.14s ease,
-              box-shadow 0.16s ease;
+              background 0.14s ease,
+              box-shadow 0.14s ease;
 }
 
 .theme-option::before {
@@ -410,8 +440,8 @@ nav button[aria-current] .nav-number {
     linear-gradient(90deg, var(--accent-tint-strong) 0%, rgba(255, 255, 255, 0.05) 30%, transparent 60%),
     linear-gradient(95deg, var(--accent-tint) 0%, var(--accent-secondary-tint) 70%, transparent 100%);
   opacity: 0;
-  transform: scaleX(0.7) translateX(-12px);
-  transform-origin: left center;
+  transform: scale(0.85);
+  transform-origin: center center;
   pointer-events: none;
   box-shadow: 0 0 0 transparent;
   transition: opacity 0.14s ease-out,
@@ -422,53 +452,47 @@ nav button[aria-current] .nav-number {
 .theme-option:hover:not([aria-pressed="true"]):not(:disabled),
 .theme-option:focus-visible:not([aria-pressed="true"]):not(:disabled) {
   border-color: var(--accent);
-  transform: translateX(4px);
-  box-shadow: 0 3px 10px -1px var(--shadow-wash-hover), 0 0 10px -2px var(--accent-tint);
+  transform: translateY(-1px);
+  box-shadow: 0 2px 8px -1px var(--shadow-wash-hover), 0 0 8px -2px var(--accent-tint);
   animation: theme-nudge 0.18s cubic-bezier(0.12, 0.95, 0.2, 1) 1;
 }
 
 .theme-option:hover:not([aria-pressed="true"]):not(:disabled)::before,
 .theme-option:focus-visible:not([aria-pressed="true"]):not(:disabled)::before {
   opacity: 1;
-  transform: scaleX(1) translateX(0);
-  box-shadow: 0 2px 8px -1px var(--shadow-wash);
+  transform: scale(1);
+  box-shadow: 0 2px 6px -1px var(--shadow-wash);
   animation: theme-backing-snap 0.18s cubic-bezier(0.12, 0.95, 0.2, 1) 1;
 }
 
 .theme-option:active:not(:disabled) {
-  transform: translateX(2px);
+  transform: translateY(0);
   transition-duration: 0.08s;
 }
 
 .theme-option[aria-pressed="true"] {
   border-color: var(--accent);
+  background: var(--bg-surface);
+  color: var(--accent);
   font-weight: 600;
-  transform: translateX(3px);
-  box-shadow: 0 3px 10px -2px var(--shadow-wash);
+  box-shadow: 0 2px 6px -1px var(--shadow-wash), 0 0 0 1px var(--accent-tint);
+  transform: none;
 }
 
 .theme-option[aria-pressed="true"]::before {
   opacity: 1;
-  transform: scaleX(1) translateX(0);
+  transform: scale(1);
   background: linear-gradient(95deg, var(--accent-tint-strong) 0%, var(--accent-tint) 100%);
-  border-left: 3px solid var(--accent);
 }
 
 .theme-option[aria-pressed="true"]::after {
-  content: "Active";
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  color: var(--accent);
-  background: var(--accent-tint);
-  padding: 2px 7px;
-  border-radius: 999px;
+  display: none;
 }
 
 .theme-option[aria-pressed="true"]:hover:not(:disabled),
 .theme-option[aria-pressed="true"]:focus-visible:not(:disabled) {
-  transform: translateX(4px);
-  box-shadow: 0 4px 14px -2px var(--shadow-wash-hover);
+  transform: translateY(-1px);
+  box-shadow: 0 3px 10px -2px var(--shadow-wash-hover);
   animation: none;
 }
 
@@ -478,19 +502,21 @@ nav button[aria-current] .nav-number {
 }
 
 .theme-description {
-  margin: 8px 2px 2px;
+  grid-column: 1 / -1;
+  margin: 6px 2px 0;
   font-family: var(--font-body);
   font-size: 11px;
-  line-height: 1.5;
+  line-height: 1.4;
   color: var(--muted);
+  text-align: center;
 }
 
 .sidebar-foot {
   margin-top: auto;
-  padding-top: 24px;
+  padding-top: 18px;
   border-top: 1px solid var(--line);
   font-family: var(--font-body);
-  font-size: 12px;
+  font-size: 12.5px;
   font-weight: 600;
   color: var(--ink);
 }
@@ -498,10 +524,10 @@ nav button[aria-current] .nav-number {
 .sidebar-foot small {
   display: block;
   color: var(--muted);
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 400;
-  line-height: 1.5;
-  margin-top: 4px;
+  line-height: 1.45;
+  margin-top: 3px;
 }
 
 .status-dot {
@@ -517,6 +543,9 @@ nav button[aria-current] .nav-number {
 
 main {
   min-width: 0;
+  height: 100vh;
+  max-height: 100vh;
+  overflow: hidden;
   background: var(--bg-gradient);
   display: flex;
   flex-direction: column;
@@ -524,13 +553,14 @@ main {
 }
 
 .topbar {
-  height: 64px;
+  height: 60px;
+  flex-shrink: 0;
   border-bottom: 1px solid var(--line);
   background: var(--sidebar-bg);
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 36px;
+  padding: 0 32px;
   font-family: var(--font-display);
   font-size: 18px;
   font-weight: 400;
@@ -540,35 +570,55 @@ main {
 
 .connection {
   font-family: var(--font-body);
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 500;
   color: var(--muted);
   border: 1px solid var(--line);
   background: var(--card-bg);
   border-radius: 999px;
-  padding: 4px 12px;
+  padding: 3px 12px;
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.03);
 }
 
+.settings-panel,
+.pending-view,
+.workspace-panel {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  box-sizing: border-box;
+}
+
 .chat-view {
-  min-height: calc(100vh - 64px);
-  max-width: 900px;
+  flex: 1;
+  height: calc(100vh - 60px);
+  max-height: calc(100vh - 60px);
+  min-height: 0;
+  max-width: 860px;
   width: 100%;
   margin: 0 auto;
-  padding: 40px 36px 24px;
+  padding: 18px 32px 16px;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
+  box-sizing: border-box;
 }
 
 .welcome {
-  margin: auto 0;
-  padding-bottom: 32px;
-  animation: arrive 0.35s cubic-bezier(0.2, 0.9, 0.3, 1);
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 16px 0 20px;
+  overflow-y: auto;
+  animation: arrive 0.3s cubic-bezier(0.2, 0.9, 0.3, 1);
 }
 
 .portrait-placeholder {
-  width: 64px;
-  height: 64px;
+  width: clamp(48px, 6vw, 60px);
+  height: clamp(48px, 6vw, 60px);
   background: linear-gradient(140deg, #ffffff 0%, var(--bg-base) 100%);
   border: 1.5px solid var(--line);
   border-radius: 18px 22px 19px 21px / 21px 19px 22px 18px;
@@ -577,12 +627,13 @@ main {
   align-items: center;
   justify-content: center;
   font-family: var(--font-display);
-  font-size: 32px;
+  font-size: clamp(24px, 3.2vw, 30px);
   font-weight: 400;
   font-style: italic;
   color: var(--accent);
   position: relative;
-  margin-bottom: 22px;
+  margin-bottom: clamp(12px, 2vh, 18px);
+  flex-shrink: 0;
   transition: transform 0.2s cubic-bezier(0.2, 0.9, 0.3, 1), box-shadow 0.2s ease;
 }
 
@@ -597,43 +648,43 @@ main {
   top: -6px;
   color: var(--accent-secondary);
   font-family: var(--font-display);
-  font-size: 22px;
+  font-size: 20px;
   line-height: 1;
 }
 
 .eyebrow {
   font-family: var(--font-body);
-  letter-spacing: 0.14em;
+  letter-spacing: 0.12em;
   color: var(--accent);
-  font-size: 11px;
+  font-size: 11.5px;
   font-weight: 600;
   text-transform: uppercase;
-  margin: 0 0 10px;
+  margin: 0 0 8px;
 }
 
 h1 {
   font-family: var(--font-display);
-  font-size: clamp(34px, 4.8vw, 54px);
+  font-size: clamp(26px, 3.8vw, 42px);
   font-weight: 400;
-  line-height: 1.18;
+  line-height: 1.2;
   letter-spacing: -0.015em;
-  margin: 10px 0 16px;
+  margin: 6px 0 12px;
   color: var(--ink);
 }
 
 .intro {
   font-family: var(--font-body);
-  font-size: 15px;
-  line-height: 1.7;
+  font-size: clamp(14px, 1.8vw, 15px);
+  line-height: 1.65;
   color: var(--muted);
-  max-width: 560px;
+  max-width: 540px;
   margin: 0;
 }
 
 .workspace-links {
   display: flex;
-  gap: 12px;
-  margin-top: 28px;
+  gap: 10px;
+  margin-top: clamp(14px, 2.5vh, 22px);
   flex-wrap: wrap;
 }
 
@@ -643,9 +694,9 @@ h1 {
   background: var(--card-bg);
   border: 1px solid var(--line);
   color: var(--ink);
-  padding: 12px 18px;
+  padding: 10px 16px;
   font-family: var(--font-body);
-  font-size: 14px;
+  font-size: 13.5px;
   font-weight: 500;
   border-radius: 12px 14px 11px 13px;
   display: inline-flex;
@@ -720,7 +771,7 @@ h1 {
 }
 
 .workspace-links span {
-  margin-left: 12px;
+  margin-left: 10px;
   color: var(--accent);
   font-weight: 600;
   display: inline-block;
@@ -738,15 +789,17 @@ h1 {
   position: relative;
   background: var(--card-bg);
   border: 1px solid var(--line);
-  padding: 16px 20px 14px;
+  padding: 12px 16px 10px;
   border-radius: 14px 16px 14px 16px;
-  box-shadow: 0 4px 20px -3px var(--shadow-wash), 0 0 0 1px rgba(255, 255, 255, 0.8) inset;
+  box-shadow: 0 3px 14px -3px var(--shadow-wash), 0 0 0 1px rgba(255, 255, 255, 0.8) inset;
+  flex-shrink: 0;
+  margin-top: auto;
   transition: border-color 0.2s ease, box-shadow 0.2s ease, background-color 0.25s ease;
 }
 
 .composer:focus-within {
   border-color: var(--accent);
-  box-shadow: 0 6px 24px -3px var(--shadow-wash-hover), 0 0 0 1px var(--accent-tint);
+  box-shadow: 0 4px 20px -3px var(--shadow-wash-hover), 0 0 0 1px var(--accent-tint);
 }
 
 .composer label {
@@ -756,7 +809,7 @@ h1 {
   font-weight: 600;
   letter-spacing: 0.04em;
   color: var(--muted);
-  margin-bottom: 6px;
+  margin-bottom: 4px;
 }
 
 textarea {
@@ -764,12 +817,14 @@ textarea {
   width: 100%;
   border: 0;
   resize: none;
-  padding: 6px 0;
+  padding: 4px 0;
   background: transparent;
   color: var(--ink);
   font-family: var(--font-body);
-  font-size: 14px;
-  line-height: 1.6;
+  font-size: 15px;
+  line-height: 1.55;
+  min-height: 42px;
+  max-height: 120px;
 }
 
 textarea::placeholder {
@@ -780,26 +835,27 @@ textarea::placeholder {
 .composer-footer {
   display: flex;
   align-items: center;
-  gap: 16px;
+  gap: 12px;
   justify-content: space-between;
-  margin-top: 8px;
-  padding-top: 10px;
+  margin-top: 6px;
+  padding-top: 8px;
   border-top: 1px solid var(--line);
 }
 
 .composer-footer small {
   font-family: var(--font-body);
-  font-size: 11px;
+  font-size: 11.5px;
   color: var(--muted);
-  line-height: 1.5;
+  line-height: 1.4;
+  flex: 1;
 }
 
 .composer-footer button {
   border: 1px solid var(--line);
-  padding: 8px 16px;
+  padding: 6px 14px;
   font-family: var(--font-body);
-  font-size: 13px;
-  font-weight: 500;
+  font-size: 12.5px;
+  font-weight: 600;
   color: var(--muted);
   background: var(--bg-surface);
   border-radius: 8px 10px 8px 10px;
@@ -943,23 +999,23 @@ textarea::placeholder {
 }
 
 @keyframes theme-nudge {
-  0% { transform: translateX(0); }
-  55% { transform: translateX(6px); }
-  100% { transform: translateX(4px); }
+  0% { transform: translateY(0); }
+  55% { transform: translateY(-2px); }
+  100% { transform: translateY(-1px); }
 }
 
 @keyframes theme-backing-snap {
   0% {
     opacity: 0;
-    transform: scaleX(0.65) translateX(-14px);
+    transform: scale(0.75);
   }
   50% {
     opacity: 1;
-    transform: scaleX(1.03) translateX(2px);
+    transform: scale(1.03);
   }
   100% {
     opacity: 1;
-    transform: scaleX(1) translateX(0);
+    transform: scale(1);
   }
 }
 
@@ -1044,28 +1100,42 @@ textarea::placeholder {
     grid-template-columns: 240px 1fr;
   }
   .sidebar {
-    padding: 24px 14px 20px;
+    padding: 20px 12px 16px;
   }
   .topbar {
-    padding: 0 24px;
+    padding: 0 20px;
+    height: 56px;
   }
   .chat-view {
-    padding: 32px 24px 20px;
+    padding: 16px 20px 14px;
+    height: calc(100vh - 56px);
+    max-height: calc(100vh - 56px);
   }
 }
 
 @media (max-width: 680px) {
+  html,
+  body {
+    overflow: auto;
+  }
   .workspace {
     display: flex;
     flex-direction: column;
+    height: auto;
+    min-height: 100vh;
+    max-height: none;
+    overflow: visible;
   }
   .sidebar {
+    height: auto;
+    max-height: none;
     border-right: 0;
     border-bottom: 1px solid var(--line);
-    padding: 16px;
+    padding: 14px 16px;
+    overflow: visible;
   }
   .nav-label {
-    margin: 14px 4px 8px;
+    margin: 12px 4px 6px;
   }
   nav {
     display: flex;
@@ -1080,21 +1150,29 @@ textarea::placeholder {
     font-size: 13px;
   }
   .theme-controls {
-    margin-top: 14px;
+    margin-top: 12px;
   }
   .sidebar-foot {
     display: none;
   }
+  main {
+    height: auto;
+    max-height: none;
+    overflow: visible;
+    flex: 1;
+  }
   .topbar {
-    height: 56px;
+    height: 52px;
     padding: 0 16px;
     font-size: 16px;
   }
   .chat-view {
-    padding: 24px 16px 18px;
+    height: calc(100dvh - 52px);
+    max-height: none;
+    padding: 16px 14px 12px;
   }
   .pending-view {
-    margin: 36px auto;
+    margin: 28px auto;
     padding: 0 16px;
   }
 }
@@ -1110,10 +1188,13 @@ textarea::placeholder {
   .composer-footer {
     flex-direction: column;
     align-items: flex-start;
-    gap: 10px;
+    gap: 8px;
+  }
+  .composer-actions {
+    width: 100%;
+    justify-content: flex-end;
   }
   .composer-footer button {
-    width: 100%;
     text-align: center;
   }
 }
@@ -1123,12 +1204,12 @@ textarea::placeholder {
     min-width: 360px;
   }
   .sidebar {
-    padding: 12px;
+    padding: 10px;
   }
   .chat-view {
-    padding: 16px 12px 14px;
+    padding: 12px 10px 10px;
   }
   .composer {
-    padding: 12px;
+    padding: 10px 12px;
   }
 }

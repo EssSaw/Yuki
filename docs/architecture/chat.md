@@ -35,10 +35,19 @@ merely because the base URL is localhost. No actual endpoint is tested by the ag
 
 ## Validation state
 
-Integrated: 34 native tests and 21 frontend tests passed, along with TypeScript/Vite
+Integrated: 43 native tests and 24 frontend tests passed, along with TypeScript/Vite
 build and diff-format checks. Native Windows release compilation passed. No real provider
 request or credential-manager round trip has been performed. GUI interaction and
 actual route/model support require manual checks.
+
+## Stream completion and layout follow-up
+
+Completion accepts an explicit OpenAI terminal finish_reason as well as [DONE].
+Fixtures reproduced false Failed outcomes when a provider sent finish_reason without
+[DONE]; unconfirmed EOF still fails. Existing saved Failed messages are not rewritten.
+The user's exact provider stream was not captured. Chat layout now uses a constrained
+scrolling transcript, wider assistant reading measure and compact composer/mood controls;
+manual desktop visual acceptance is still required.
 
 ## Current limitations
 

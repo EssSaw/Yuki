@@ -626,7 +626,6 @@ pub async fn execute_chat_stream(
                                 }
                                 ParsedEvent::Done => {
                                     stream_completed = true;
-                                    break;
                                 }
                                 ParsedEvent::Error(err) => {
                                     let _ = save_terminal_assistant(

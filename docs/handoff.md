@@ -60,5 +60,15 @@ transmission during development. Manual acceptance still needed: Windows credent
 storage, actual 9router model/stream support, cancel/reopen and restart persistence.
 See chat documentation for setup and current limitations. No automatic project context
 or tool execution in this slice. Then resume configurable data root/project access
+
+Current follow-up integrated: native fixtures reproduced ignored terminal finish_reason
+without [DONE], producing false Failed outcomes. Completion now accepts either signal;
+truncated EOF stays Failed. Exact live-provider cause remains unconfirmed; old history
+statuses are not rewritten. Layout improves reading width, type/spacing, transcript
+scrolling and compact composer/mood controls. Stale Design preview footer removed.
+Separate Coding agents owned Rust and CSS; parent integrated and verified 43 native
+and 24 frontend tests plus frontend build. Native Windows release rebuild passed.
+No actual endpoint requests or personal history inspected. Await user desktop visual
+review and a fresh non-sensitive chat test; don't claim screenshots/runtime acceptance. Then resume configurable data root/project access
 and verified 9router connectivity. Future scope is not blanket approval for
 self-modification, remote sharing or system-wide access.

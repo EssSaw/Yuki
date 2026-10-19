@@ -45,11 +45,7 @@ impl SseParser {
                     continue;
                 }
 
-                match parse_chunk_json(payload) {
-                    ChunkResult::Delta(text) => events.push(ParsedEvent::Delta(text)),
-                    ChunkResult::Error(err) => events.push(ParsedEvent::Error(err)),
-                    ChunkResult::Empty => {}
-                }
+                parse_chunk_json(payload, &mut events);
             } else if trimmed.starts_with('{') {
                 // Raw JSON error from provider without data: prefix
                 if let Some(err) = parse_raw_json_error(trimmed) {
@@ -75,11 +71,7 @@ impl SseParser {
             if payload == "[DONE]" {
                 events.push(ParsedEvent::Done);
             } else {
-                match parse_chunk_json(payload) {
-                    ChunkResult::Delta(text) => events.push(ParsedEvent::Delta(text)),
-                    ChunkResult::Error(err) => events.push(ParsedEvent::Error(err)),
-                    ChunkResult::Empty => {}
-                }
+                parse_chunk_json(payload, &mut events);
             }
         } else if trimmed.starts_with('{') {
             if let Some(err) = parse_raw_json_error(trimmed) {
@@ -90,17 +82,12 @@ impl SseParser {
     }
 }
 
-enum ChunkResult {
-    Delta(String),
-    Error(String),
-    Empty,
-}
-
 #[derive(Deserialize)]
 struct OpenAiChunk {
     #[serde(default)]
     choices: Vec<OpenAiChoice>,
     error: Option<OpenAiErrorObj>,
+    message: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -126,38 +113,76 @@ struct RawErrorPayload {
     message: Option<String>,
 }
 
-fn parse_chunk_json(payload: &str) -> ChunkResult {
+/// Checks whether a finish_reason indicates a valid normal or bounded completion.
+pub fn is_valid_finish_reason(reason: &str) -> bool {
+    let r = reason.trim();
+    if r.is_empty() || r.eq_ignore_ascii_case("null") || r.eq_ignore_ascii_case("none") {
+        return false;
+    }
+    if r.eq_ignore_ascii_case("error") {
+        return false;
+    }
+    matches!(
+        r.to_ascii_lowercase().as_str(),
+        "stop"
+            | "length"
+            | "tool_calls"
+            | "content_filter"
+            | "function_call"
+            | "done"
+            | "end_turn"
+            | "stop_sequence"
+            | "eos"
+    )
+}
+
+fn parse_chunk_json(payload: &str, events: &mut Vec<ParsedEvent>) {
     match serde_json::from_str::<OpenAiChunk>(payload) {
         Ok(chunk) => {
             if let Some(err) = chunk.error {
                 let msg = err
                     .message
                     .unwrap_or_else(|| "Unknown error from provider".to_string());
-                return ChunkResult::Error(sanitize_error_message(&msg));
+                events.push(ParsedEvent::Error(sanitize_error_message(&msg)));
+                return;
             }
 
+            if chunk.choices.is_empty() {
+                if let Some(msg) = chunk.message {
+                    events.push(ParsedEvent::Error(sanitize_error_message(&msg)));
+                    return;
+                }
+            }
+
+            let mut has_done = false;
             for choice in chunk.choices {
                 if let Some(content) = choice.delta.content {
                     if !content.is_empty() {
-                        return ChunkResult::Delta(content);
+                        events.push(ParsedEvent::Delta(content));
                     }
                 }
                 if let Some(ref finish) = choice.finish_reason {
-                    if finish == "stop" || finish == "done" {
-                        // Might be completion
+                    let trimmed = finish.trim();
+                    if trimmed.eq_ignore_ascii_case("error") {
+                        events.push(ParsedEvent::Error(
+                            "Provider stopped generation with error".to_string(),
+                        ));
+                        return;
+                    }
+                    if is_valid_finish_reason(trimmed) {
+                        has_done = true;
                     }
                 }
             }
 
-            ChunkResult::Empty
+            if has_done {
+                events.push(ParsedEvent::Done);
+            }
         }
         Err(_) => {
             // Check if it was a standalone error object
             if let Some(err) = parse_raw_json_error(payload) {
-                ChunkResult::Error(err)
-            } else {
-                // If it can't be parsed at all, avoid failing the stream unless it's explicitly an error
-                ChunkResult::Empty
+                events.push(ParsedEvent::Error(err));
             }
         }
     }
