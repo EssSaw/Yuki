@@ -3,9 +3,88 @@ use std::path::{Path, PathBuf};
 use super::models::ProjectEntry;
 use super::settings::load_settings;
 
+/// Checks if a directory name corresponds to a common secret/credential store.
+pub fn is_secret_directory(name: &str) -> bool {
+    let lower = name.to_lowercase();
+    matches!(
+        lower.as_str(),
+        ".ssh"
+            | ".aws"
+            | ".azure"
+            | ".kube"
+            | ".gnupg"
+            | ".docker"
+            | ".gcloud"
+            | ".password-store"
+            | "secrets"
+            | ".secrets"
+    )
+}
+
+/// Checks if a component name matches a reserved Windows DOS device name.
+pub fn is_dos_device_name(name: &str) -> bool {
+    let stem = Path::new(name)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or(name);
+    let upper = stem.to_ascii_uppercase();
+    matches!(
+        upper.as_str(),
+        "CON"
+            | "PRN"
+            | "AUX"
+            | "NUL"
+            | "COM1"
+            | "COM2"
+            | "COM3"
+            | "COM4"
+            | "COM5"
+            | "COM6"
+            | "COM7"
+            | "COM8"
+            | "COM9"
+            | "LPT1"
+            | "LPT2"
+            | "LPT3"
+            | "LPT4"
+            | "LPT5"
+            | "LPT6"
+            | "LPT7"
+            | "LPT8"
+            | "LPT9"
+    )
+}
+
+/// Detects if a path is a device or UNC path.
+pub fn is_unc_or_device_path(path: &Path) -> bool {
+    let path_str = path.to_string_lossy();
+    if path_str.starts_with(r"\\") || path_str.starts_with("//") {
+        return true;
+    }
+    for comp in path.components() {
+        if let std::path::Component::Prefix(prefix) = comp {
+            match prefix.kind() {
+                std::path::Prefix::Disk(_) | std::path::Prefix::VerbatimDisk(_) => {}
+                _ => return true,
+            }
+        }
+        if let std::path::Component::Normal(name) = comp {
+            if is_dos_device_name(&name.to_string_lossy()) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 /// Checks if a file or directory name is considered secret, sensitive, or system-restricted.
 pub fn is_blocked_name(name: &str) -> bool {
     let lower = name.to_lowercase();
+
+    // Secret and credential directories
+    if is_secret_directory(name) {
+        return true;
+    }
 
     // Git metadata and repositories
     if lower == ".git" {
@@ -19,6 +98,23 @@ pub fn is_blocked_name(name: &str) -> bool {
 
     // Credentials files
     if lower == "credentials" || lower.starts_with("credentials.") {
+        return true;
+    }
+
+    // Package manager and auth tokens
+    if lower == ".npmrc" || lower == ".pypirc" || lower == ".netrc" || lower == "_netrc" {
+        return true;
+    }
+
+    // Secrets files
+    if lower == "secrets.json"
+        || lower == "secrets.yaml"
+        || lower == "secrets.yml"
+        || lower == "secrets.toml"
+        || lower == "secrets.env"
+        || lower == "known_hosts"
+        || lower == "authorized_keys"
+    {
         return true;
     }
 
@@ -179,6 +275,10 @@ pub fn is_system_directory(path: &Path) -> bool {
 
 /// Validates a project root candidate path and returns its canonicalized PathBuf.
 pub fn validate_project_root(path: &Path) -> Result<PathBuf, String> {
+    if is_unc_or_device_path(path) {
+        return Err("Device and UNC paths are not permitted".to_string());
+    }
+
     if !path.exists() {
         return Err("Project directory does not exist".to_string());
     }
@@ -228,6 +328,9 @@ pub fn list_project_directory_impl(
     }
 
     let trimmed_rel = relative_path.trim();
+    if is_unc_or_device_path(Path::new(root)) {
+        return Err("Device and UNC paths are not permitted".to_string());
+    }
     let (target_dir, clean_prefix) = if trimmed_rel.is_empty() || trimmed_rel == "." {
         (canonical_root.clone(), String::new())
     } else {
@@ -244,6 +347,9 @@ pub fn list_project_directory_impl(
                 std::path::Component::CurDir => continue,
                 std::path::Component::Normal(c) => {
                     let s = c.to_string_lossy();
+                    if is_dos_device_name(&s) {
+                        return Err("Device and UNC paths are not permitted".to_string());
+                    }
                     if is_blocked_name(&s) {
                         return Err("Access to restricted folder or file is blocked".to_string());
                     }
@@ -347,4 +453,113 @@ pub fn list_project_directory_impl(
     });
 
     Ok(entries)
+}
+
+/// Checks if a path is within Yuki's own configuration directory or data root.
+pub fn is_yuki_internal_path(config_dir: &Path, canonical_path: &Path) -> bool {
+    if let Ok(canon_cfg) = dunce::canonicalize(config_dir) {
+        if canonical_path.starts_with(&canon_cfg) {
+            return true;
+        }
+    }
+    if let Ok(settings) = load_settings(config_dir) {
+        if let Some(ref data_root) = settings.data_root {
+            if let Ok(canon_data) = dunce::canonicalize(data_root) {
+                if canonical_path.starts_with(&canon_data) {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
+/// Validates an ordinary local file path for reading according to Yuki safety policy.
+/// Returns the canonical PathBuf on success.
+/// Keeps error messages generic and content-free.
+pub fn validate_read_path(config_dir: &Path, path_str: &str) -> Result<PathBuf, String> {
+    let trimmed = path_str.trim();
+    if trimmed.is_empty() {
+        return Err("Path cannot be empty".to_string());
+    }
+
+    let path = Path::new(trimmed);
+    if !path.is_absolute() {
+        return Err("Path must be absolute".to_string());
+    }
+
+    if is_unc_or_device_path(path) {
+        return Err("Device and UNC paths are not permitted".to_string());
+    }
+
+    // Check components of raw input path
+    for comp in path.components() {
+        if let std::path::Component::Normal(name) = comp {
+            let s = name.to_string_lossy();
+            if is_dos_device_name(&s) {
+                return Err("Device and UNC paths are not permitted".to_string());
+            }
+            if is_blocked_name(&s) {
+                return Err("Access to restricted folder or file is blocked".to_string());
+            }
+        }
+    }
+
+    // Reject indirection before resolving it, including Windows junctions.
+    for ancestor in path.ancestors() {
+        let metadata = std::fs::symlink_metadata(ancestor)
+            .map_err(|_| "File not found or inaccessible".to_string())?;
+        if metadata.file_type().is_symlink() {
+            return Err("Links are not permitted for local file reads".to_string());
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::MetadataExt;
+            if metadata.file_attributes() & 0x400 != 0 {
+                return Err("Reparse points are not permitted for local file reads".to_string());
+            }
+        }
+    }
+
+    // Canonicalize path and recheck the resolved destination.
+    let canonical =
+        dunce::canonicalize(path).map_err(|_| "File not found or inaccessible".to_string())?;
+
+    if is_unc_or_device_path(&canonical) {
+        return Err("Device and UNC paths are not permitted".to_string());
+    }
+
+    if is_drive_root(&canonical) || is_user_profile_root(&canonical) {
+        return Err("Access to root directory is blocked".to_string());
+    }
+
+    if is_system_directory(&canonical) {
+        return Err("Access to system directory is blocked".to_string());
+    }
+
+    if is_yuki_internal_path(config_dir, &canonical) {
+        return Err("Access to application data or settings is blocked".to_string());
+    }
+
+    // Check canonical path components
+    for comp in canonical.components() {
+        if let std::path::Component::Normal(name) = comp {
+            let s = name.to_string_lossy();
+            if is_dos_device_name(&s) {
+                return Err("Device and UNC paths are not permitted".to_string());
+            }
+            if is_blocked_name(&s) {
+                return Err("Access to restricted folder or file is blocked".to_string());
+            }
+        }
+    }
+
+    // Target must be a regular file
+    let meta =
+        std::fs::metadata(&canonical).map_err(|_| "Cannot inspect file metadata".to_string())?;
+    if !meta.file_type().is_file() {
+        return Err("Target is not a regular file".to_string());
+    }
+
+    Ok(canonical)
 }

@@ -1,5 +1,40 @@
 # Current handoff
 
+## Local preview / sharing UI integration (2026-10-20)
+
+Completed the approved frontend-only slice in `src/WorkspacePanel.tsx`,
+`src/WorkspacePanel.css` and `src/WorkspacePanel.test.tsx`; contracts and privacy
+boundaries are in [workspace storage](architecture/workspace-storage.md#frontend-integration).
+Explorer entries and explicit absolute paths now open local-only bounded UTF-8
+previews with byte range/size, next-range and back-to-start replacement navigation.
+Preview generations invalidate on navigation, revocation, failure, close, section
+changes and unmount. Per-root default-off sharing uses explicit 9router/upstream
+confirmation before enable, direct disable and failure-preserved settings. Actual
+AI file transmission remains absent. Browser preview invokes no native operations.
+
+Validation: `npm test -- src\WorkspacePanel.test.tsx src\App.test.tsx
+src\Typography.test.js` passed 32 tests (12 workspace tests); `npm run build`
+passed TypeScript/Vite (29 modules); `git diff --check` passed. No native build,
+real file/picker IPC, screenshots or desktop/narrow visual acceptance performed.
+Preserved pre-existing native foundation, documentation and unrelated `target/`.
+No dependencies, personal reads, provider/network requests, commits or pushes.
+Stop after this integration; future AI tools must reauthorize at transmission.
+This entry supersedes older statements below that frontend preview/toggles are absent.
+
+## Native read foundation follow-up
+
+Implemented native-only bounded UTF-8 local reads and default-off per-project provider
+sharing grants. No frontend reader, AI tool loop or file upload is wired yet. Local
+reads reject OS/secret/app-data paths, UNC/device paths and symlink/reparse ancestors;
+no arbitrary total-file-size cap, maximum read chunk 64 KiB (with UTF-8 boundary handling).
+Provider authorization rechecks approved root containment and the current sharing grant;
+revocation removes grants. Policy is location/name-based, not exhaustive content DLP.
+Primary assistant tightened ancestor link checks after integration review. All 64 native
+tests and cargo fmt --check passed. Changes remain uncommitted pending frontend/tool
+integration. Next: focused file preview and sharing controls using Hard UI, then bounded
+AI read tools with provider authorization at the transmission boundary.
+
+
 ## Current checkpoint (2026-10-19)
 
 User accepted the overall UI, readability improvements and sidebar fit, and requested

@@ -114,7 +114,21 @@ pub fn load_settings(config_dir: &Path) -> Result<WorkspaceSettings, String> {
                 let name = entry.file_name().to_string_lossy().to_string();
                 if name.starts_with(".settings.json.bak_") {
                     if let Ok(content) = std::fs::read_to_string(entry.path()) {
-                        if let Ok(settings) = serde_json::from_str::<WorkspaceSettings>(&content) {
+                        if let Ok(mut settings) =
+                            serde_json::from_str::<WorkspaceSettings>(&content)
+                        {
+                            settings.provider_sharing_grants.retain(|grant| {
+                                settings.project_roots.iter().any(|root| {
+                                    grant == root
+                                        || match (
+                                            dunce::canonicalize(grant),
+                                            dunce::canonicalize(root),
+                                        ) {
+                                            (Ok(g), Ok(r)) => g == r,
+                                            _ => false,
+                                        }
+                                })
+                            });
                             return Ok(settings);
                         }
                     }
@@ -127,7 +141,20 @@ pub fn load_settings(config_dir: &Path) -> Result<WorkspaceSettings, String> {
     let content =
         std::fs::read_to_string(&dest).map_err(|e| format!("Failed to read settings file: {e}"))?;
 
-    serde_json::from_str(&content).map_err(|e| format!("Failed to parse settings JSON: {e}"))
+    let mut settings: WorkspaceSettings = serde_json::from_str(&content)
+        .map_err(|e| format!("Failed to parse settings JSON: {e}"))?;
+
+    settings.provider_sharing_grants.retain(|grant| {
+        settings.project_roots.iter().any(|root| {
+            grant == root
+                || match (dunce::canonicalize(grant), dunce::canonicalize(root)) {
+                    (Ok(g), Ok(r)) => g == r,
+                    _ => false,
+                }
+        })
+    });
+
+    Ok(settings)
 }
 
 /// Retrieves the current workspace settings.
@@ -228,6 +255,7 @@ pub fn add_project_root_path(
 }
 
 /// Revokes approval for a project root. Does NOT delete any project files on disk.
+/// Automatically clears any provider-sharing grant associated with the revoked root.
 pub fn remove_project_root_impl(
     config_dir: &Path,
     root_to_remove: &str,
@@ -248,6 +276,86 @@ pub fn remove_project_root_impl(
         }
         true
     });
+
+    // Clear provider sharing grant for the revoked root
+    settings.provider_sharing_grants.retain(|g| {
+        if g == root_to_remove {
+            return false;
+        }
+        if let Some(ref tc) = target_canon {
+            if let Ok(gc) = dunce::canonicalize(g) {
+                if &gc == tc {
+                    return false;
+                }
+            }
+        }
+        true
+    });
+
+    save_settings_atomic(config_dir, &settings)?;
+
+    Ok(settings)
+}
+
+/// Toggles or explicitly sets provider sharing for an approved project root.
+/// - Validates that the specified root is currently an approved project root.
+/// - If `enabled` is Some(true), adds the canonical root to provider_sharing_grants if not already present.
+/// - If `enabled` is Some(false), removes the canonical root from provider_sharing_grants.
+/// - If `enabled` is None, flips the current grant status.
+/// - Atomically persists settings and returns the updated WorkspaceSettings.
+pub fn toggle_project_provider_sharing_impl(
+    config_dir: &Path,
+    root: &str,
+    enabled: Option<bool>,
+) -> Result<WorkspaceSettings, String> {
+    let mut settings = load_settings(config_dir)?;
+
+    let canonical_root =
+        dunce::canonicalize(root).map_err(|e| format!("Cannot inspect project root: {e}"))?;
+    let canonical_root_str = canonical_root.to_string_lossy().to_string();
+
+    // Verify root is an approved project root
+    let is_approved = settings.project_roots.iter().any(|r| {
+        r == root
+            || dunce::canonicalize(r)
+                .map(|c| c == canonical_root)
+                .unwrap_or(false)
+    });
+
+    if !is_approved {
+        return Err("Cannot configure provider sharing for unapproved project folder".to_string());
+    }
+
+    let is_currently_granted = settings.provider_sharing_grants.iter().any(|g| {
+        g == root
+            || g == &canonical_root_str
+            || dunce::canonicalize(g)
+                .map(|c| c == canonical_root)
+                .unwrap_or(false)
+    });
+
+    let new_state = match enabled {
+        Some(val) => val,
+        None => !is_currently_granted,
+    };
+
+    if new_state {
+        if !is_currently_granted {
+            settings.provider_sharing_grants.push(canonical_root_str);
+        }
+    } else {
+        settings.provider_sharing_grants.retain(|g| {
+            if g == root || g == &canonical_root_str {
+                return false;
+            }
+            if let Ok(gc) = dunce::canonicalize(g) {
+                if gc == canonical_root {
+                    return false;
+                }
+            }
+            true
+        });
+    }
 
     save_settings_atomic(config_dir, &settings)?;
 

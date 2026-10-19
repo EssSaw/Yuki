@@ -85,23 +85,26 @@
   margin: 24px 0;
 }
 .project-roots li {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 12px 0;
+  padding: 16px 0;
   border-bottom: 1px solid var(--line-soft);
 }
-.project-roots li > button:first-child {
+.project-root-actions, .project-sharing, .workspace-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.project-root-actions > button:first-child {
   flex: 1;
   min-width: 0;
 }
-.project-roots li > button:last-child {
+.project-root-actions > button:last-child {
   flex-shrink: 0;
   background: transparent;
   border-color: transparent;
   color: #784356;
 }
-.project-roots li > button:last-child:hover:not(:disabled) {
+.project-root-actions > button:last-child:hover:not(:disabled) {
   background: var(--dusty-pink-wash);
   border-color: var(--dusty-pink-border);
 }
@@ -127,12 +130,65 @@
   margin-top: 4px;
 }
 @media (max-width: 600px) {
-  .project-roots li {
+  .project-root-actions {
     align-items: stretch;
     flex-direction: column;
     gap: 4px;
   }
-  .project-roots li > button:last-child {
+  .project-root-actions > button:last-child {
     align-self: flex-start;
   }
+}
+
+.project-sharing {
+  margin-top: 12px;
+}
+.project-sharing p {
+  margin: 0;
+  font-size: var(--text-secondary);
+  color: var(--muted);
+}
+.sharing-consent {
+  margin-top: 16px;
+  padding: 4px 16px 16px;
+  border-left: 2px solid var(--dusty-pink-border);
+  background: var(--dusty-pink-wash);
+}
+.local-reader {
+  border-top: 1px solid var(--line);
+  margin-top: 28px;
+}
+.local-reader label {
+  display: block;
+  margin-bottom: 8px;
+  font-size: var(--text-control);
+}
+.local-reader input {
+  flex: 1 1 260px;
+  min-width: 0;
+  max-width: 100%;
+  min-height: 44px;
+  padding: 10px 12px;
+  border: 1px solid var(--muted-blue-border);
+  border-radius: 8px;
+  background: var(--muted-blue-bg);
+  color: inherit;
+  font: var(--text-control)/1.5 var(--font-mono);
+}
+.file-preview {
+  margin-top: 20px;
+}
+.file-preview .chunk-range {
+  font-size: var(--text-secondary);
+  color: var(--muted);
+}
+.file-preview pre {
+  max-height: 55vh;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  padding: 16px 0;
+  border-top: 1px solid var(--line-soft);
+  font: var(--text-control)/1.7 var(--font-mono);
+  tab-size: 4;
 }
