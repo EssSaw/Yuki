@@ -29,6 +29,10 @@ button {
   cursor: pointer;
 }
 
+button:disabled {
+  cursor: not-allowed;
+}
+
 button:focus-visible,
 textarea:focus-visible {
   outline: 2px solid var(--accent);
@@ -213,7 +217,7 @@ nav button {
   align-items: center;
   border-radius: 8px 12px 10px 14px;
   cursor: pointer;
-  transition: color 0.16s cubic-bezier(0.2, 0.9, 0.3, 1),
+  transition: color 0.14s ease,
               transform 0.16s cubic-bezier(0.2, 0.9, 0.3, 1);
 }
 
@@ -222,15 +226,18 @@ nav button::before {
   position: absolute;
   inset: 1px 2px;
   z-index: -1;
-  background: linear-gradient(95deg, var(--accent-tint) 0%, var(--accent-secondary-tint) 100%);
+  background:
+    linear-gradient(90deg, var(--accent-tint-strong) 0%, rgba(255, 255, 255, 0.06) 32%, transparent 60%),
+    linear-gradient(98deg, var(--accent-tint) 0%, var(--accent-secondary-tint) 85%, transparent 100%);
   border-radius: 6px 14px 8px 12px;
   opacity: 0;
-  transform: scaleX(0.75) translateX(-8px);
+  transform: scaleX(0.65) translateX(-18px);
   transform-origin: left center;
   pointer-events: none;
-  transition: opacity 0.16s cubic-bezier(0.2, 0.9, 0.3, 1),
+  box-shadow: 0 0 0 transparent;
+  transition: opacity 0.14s ease-out,
               transform 0.16s cubic-bezier(0.2, 0.9, 0.3, 1),
-              background 0.16s ease;
+              box-shadow 0.14s ease-out;
 }
 
 nav button::after {
@@ -245,24 +252,35 @@ nav button::after {
   opacity: 0;
   transform: translateY(-50%) scale(0.4);
   pointer-events: none;
-  transition: opacity 0.16s cubic-bezier(0.2, 0.9, 0.3, 1),
+  transition: opacity 0.14s ease,
               transform 0.16s cubic-bezier(0.2, 0.9, 0.3, 1);
 }
 
-nav button:hover {
+nav button:hover:not([aria-current]):not(:disabled),
+nav button:focus-visible:not([aria-current]):not(:disabled) {
   color: var(--ink);
-  transform: translateX(4px);
+  transform: translateX(5px);
+  animation: nav-nudge 0.18s cubic-bezier(0.12, 0.95, 0.2, 1) 1;
 }
 
-nav button:hover::before {
+nav button:hover:not([aria-current]):not(:disabled)::before,
+nav button:focus-visible:not([aria-current]):not(:disabled)::before {
   opacity: 1;
   transform: scaleX(1) translateX(0);
-  box-shadow: 0 2px 8px -2px var(--shadow-wash);
+  box-shadow: 0 2px 10px -2px var(--shadow-wash-hover), 0 0 12px -3px var(--accent-tint);
+  animation: backing-snap-slide 0.18s cubic-bezier(0.12, 0.95, 0.2, 1) 1;
 }
 
-nav button:hover::after {
-  opacity: 0.7;
+nav button:hover:not([aria-current]):not(:disabled)::after,
+nav button:focus-visible:not([aria-current]):not(:disabled)::after {
+  opacity: 0.75;
   transform: translateY(-50%) scale(1);
+  animation: dot-snap-settle 0.18s cubic-bezier(0.12, 0.95, 0.2, 1) 1;
+}
+
+nav button:active:not(:disabled) {
+  transform: translateX(3px);
+  transition-duration: 0.08s;
 }
 
 nav button[aria-current] {
@@ -286,6 +304,28 @@ nav button[aria-current]::after {
   box-shadow: 0 0 0 3px var(--accent-tint);
 }
 
+nav button[aria-current]:hover:not(:disabled),
+nav button[aria-current]:focus-visible:not(:disabled) {
+  transform: translateX(5px);
+  animation: none;
+}
+
+nav button[aria-current]:hover:not(:disabled)::before,
+nav button[aria-current]:focus-visible:not(:disabled)::before {
+  background: var(--bg-surface);
+  box-shadow: 0 4px 16px -2px var(--shadow-wash-hover), 0 0 0 1px var(--accent-tint);
+  border-left: 3px solid var(--accent);
+  animation: none;
+}
+
+nav button[aria-current]:hover:not(:disabled)::after,
+nav button[aria-current]:focus-visible:not(:disabled)::after {
+  opacity: 1;
+  transform: translateY(-50%) scale(1.2);
+  box-shadow: 0 0 0 4px var(--accent-tint);
+  animation: none;
+}
+
 .nav-number {
   font-family: var(--font-mono);
   font-size: 11px;
@@ -293,7 +333,18 @@ nav button[aria-current]::after {
   color: var(--accent);
   margin-right: 10px;
   opacity: 0.85;
-  transition: color 0.16s ease;
+  display: inline-block;
+  transition: color 0.14s ease,
+              opacity 0.14s ease,
+              transform 0.16s cubic-bezier(0.2, 0.9, 0.3, 1);
+}
+
+nav button:hover:not(:disabled) .nav-number,
+nav button:focus-visible:not(:disabled) .nav-number {
+  color: var(--accent);
+  opacity: 1;
+  transform: translateX(1px);
+  animation: number-nudge 0.18s cubic-bezier(0.12, 0.95, 0.2, 1) 1;
 }
 
 nav button[aria-current] .nav-number {
@@ -344,8 +395,8 @@ nav button[aria-current] .nav-number {
   align-items: center;
   justify-content: space-between;
   transition: transform 0.16s cubic-bezier(0.2, 0.9, 0.3, 1),
-              border-color 0.16s ease,
-              color 0.16s ease,
+              border-color 0.14s ease,
+              color 0.14s ease,
               box-shadow 0.16s ease;
 }
 
@@ -355,24 +406,38 @@ nav button[aria-current] .nav-number {
   inset: 0;
   border-radius: inherit;
   z-index: -1;
-  background: linear-gradient(95deg, var(--accent-tint) 0%, transparent 100%);
+  background:
+    linear-gradient(90deg, var(--accent-tint-strong) 0%, rgba(255, 255, 255, 0.05) 30%, transparent 60%),
+    linear-gradient(95deg, var(--accent-tint) 0%, var(--accent-secondary-tint) 70%, transparent 100%);
   opacity: 0;
-  transform: scaleX(0.75) translateX(-8px);
+  transform: scaleX(0.7) translateX(-12px);
   transform-origin: left center;
   pointer-events: none;
-  transition: opacity 0.16s cubic-bezier(0.2, 0.9, 0.3, 1),
-              transform 0.16s cubic-bezier(0.2, 0.9, 0.3, 1);
+  box-shadow: 0 0 0 transparent;
+  transition: opacity 0.14s ease-out,
+              transform 0.16s cubic-bezier(0.2, 0.9, 0.3, 1),
+              box-shadow 0.14s ease-out;
 }
 
-.theme-option:hover {
+.theme-option:hover:not([aria-pressed="true"]):not(:disabled),
+.theme-option:focus-visible:not([aria-pressed="true"]):not(:disabled) {
   border-color: var(--accent);
-  transform: translateX(3px);
-  box-shadow: 0 2px 8px -1px var(--shadow-wash);
+  transform: translateX(4px);
+  box-shadow: 0 3px 10px -1px var(--shadow-wash-hover), 0 0 10px -2px var(--accent-tint);
+  animation: theme-nudge 0.18s cubic-bezier(0.12, 0.95, 0.2, 1) 1;
 }
 
-.theme-option:hover::before {
+.theme-option:hover:not([aria-pressed="true"]):not(:disabled)::before,
+.theme-option:focus-visible:not([aria-pressed="true"]):not(:disabled)::before {
   opacity: 1;
   transform: scaleX(1) translateX(0);
+  box-shadow: 0 2px 8px -1px var(--shadow-wash);
+  animation: theme-backing-snap 0.18s cubic-bezier(0.12, 0.95, 0.2, 1) 1;
+}
+
+.theme-option:active:not(:disabled) {
+  transform: translateX(2px);
+  transition-duration: 0.08s;
 }
 
 .theme-option[aria-pressed="true"] {
@@ -398,6 +463,18 @@ nav button[aria-current] .nav-number {
   background: var(--accent-tint);
   padding: 2px 7px;
   border-radius: 999px;
+}
+
+.theme-option[aria-pressed="true"]:hover:not(:disabled),
+.theme-option[aria-pressed="true"]:focus-visible:not(:disabled) {
+  transform: translateX(4px);
+  box-shadow: 0 4px 14px -2px var(--shadow-wash-hover);
+  animation: none;
+}
+
+.theme-option[aria-pressed="true"]:hover:not(:disabled)::before,
+.theme-option[aria-pressed="true"]:focus-visible:not(:disabled)::before {
+  animation: none;
 }
 
 .theme-description {
@@ -577,7 +654,7 @@ h1 {
   box-shadow: 0 2px 8px -2px var(--shadow-wash);
   transition: transform 0.16s cubic-bezier(0.2, 0.9, 0.3, 1),
               box-shadow 0.16s ease,
-              border-color 0.16s ease;
+              border-color 0.14s ease;
 }
 
 .workspace-links button::before {
@@ -586,40 +663,75 @@ h1 {
   inset: 0;
   border-radius: inherit;
   z-index: -1;
-  background: linear-gradient(105deg, var(--accent-tint) 0%, var(--accent-secondary-tint) 100%);
+  background:
+    linear-gradient(90deg, var(--accent-tint-strong) 0%, rgba(255, 255, 255, 0.08) 25%, transparent 55%),
+    linear-gradient(105deg, var(--accent-tint) 0%, var(--accent-secondary-tint) 90%, transparent 100%);
   opacity: 0;
-  transform: scale(0.92) translateX(-6px);
+  transform: scaleX(0.7) translateX(-12px);
   transform-origin: left center;
   pointer-events: none;
-  transition: opacity 0.16s cubic-bezier(0.2, 0.9, 0.3, 1),
+  transition: opacity 0.14s ease-out,
               transform 0.16s cubic-bezier(0.2, 0.9, 0.3, 1);
 }
 
-.workspace-links button:hover {
+.workspace-links button::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 15%;
+  bottom: 15%;
+  width: 4px;
+  border-radius: 4px;
+  background: var(--accent);
+  opacity: 0;
+  transform: scaleY(0.4) translateX(-4px);
+  transform-origin: center center;
+  pointer-events: none;
+  transition: opacity 0.14s ease-out,
+              transform 0.16s cubic-bezier(0.12, 0.95, 0.2, 1);
+}
+
+.workspace-links button:hover:not(:disabled),
+.workspace-links button:focus-visible:not(:disabled) {
   border-color: var(--accent);
-  transform: translateY(-2px);
-  box-shadow: 0 5px 16px -2px var(--shadow-wash-hover);
+  transform: translateY(-2px) translateX(3px);
+  box-shadow: 0 6px 18px -2px var(--shadow-wash-hover), 0 0 12px -2px var(--accent-tint);
+  animation: card-nudge 0.18s cubic-bezier(0.12, 0.95, 0.2, 1) 1;
 }
 
-.workspace-links button:hover::before {
+.workspace-links button:hover:not(:disabled)::before,
+.workspace-links button:focus-visible:not(:disabled)::before {
   opacity: 1;
-  transform: scale(1) translateX(0);
+  transform: scaleX(1) translateX(0);
+  animation: card-backing-snap 0.18s cubic-bezier(0.12, 0.95, 0.2, 1) 1;
 }
 
-.workspace-links button:active {
-  transform: translateY(0);
+.workspace-links button:hover:not(:disabled)::after,
+.workspace-links button:focus-visible:not(:disabled)::after {
+  opacity: 0.85;
+  transform: scaleY(1) translateX(2px);
+  animation: accent-bar-snap 0.18s cubic-bezier(0.12, 0.95, 0.2, 1) 1;
+}
+
+.workspace-links button:active:not(:disabled) {
+  transform: translateY(0) translateX(1px);
   box-shadow: 0 2px 6px -1px var(--shadow-wash);
+  transition-duration: 0.08s;
 }
 
 .workspace-links span {
   margin-left: 12px;
   color: var(--accent);
   font-weight: 600;
-  transition: transform 0.16s cubic-bezier(0.2, 0.9, 0.3, 1);
+  display: inline-block;
+  transition: transform 0.16s cubic-bezier(0.2, 0.9, 0.3, 1),
+              color 0.14s ease;
 }
 
-.workspace-links button:hover span {
+.workspace-links button:hover:not(:disabled) span,
+.workspace-links button:focus-visible:not(:disabled) span {
   transform: translateX(4px);
+  animation: arrow-nudge 0.18s cubic-bezier(0.12, 0.95, 0.2, 1) 1;
 }
 
 .composer {
@@ -698,6 +810,20 @@ textarea::placeholder {
               border-color 0.16s ease;
 }
 
+.composer-footer button:disabled {
+  cursor: not-allowed;
+  pointer-events: none;
+  transform: none !important;
+  box-shadow: none !important;
+  animation: none !important;
+}
+
+.composer-footer button:disabled::before,
+.composer-footer button:disabled::after {
+  display: none !important;
+  animation: none !important;
+}
+
 .composer-footer button:not(:disabled) {
   cursor: pointer;
   opacity: 1;
@@ -774,6 +900,111 @@ textarea::placeholder {
   font-style: italic;
 }
 
+@keyframes nav-nudge {
+  0% { transform: translateX(0); }
+  55% { transform: translateX(7.5px); }
+  100% { transform: translateX(5px); }
+}
+
+@keyframes number-nudge {
+  0% { transform: translateX(0); }
+  55% { transform: translateX(2.5px); }
+  100% { transform: translateX(1px); }
+}
+
+@keyframes backing-snap-slide {
+  0% {
+    opacity: 0;
+    transform: scaleX(0.6) translateX(-20px);
+  }
+  50% {
+    opacity: 1;
+    transform: scaleX(1.04) translateX(2px);
+  }
+  100% {
+    opacity: 1;
+    transform: scaleX(1) translateX(0);
+  }
+}
+
+@keyframes dot-snap-settle {
+  0% {
+    opacity: 0;
+    transform: translateY(-50%) scale(0.3) translateX(4px);
+  }
+  60% {
+    opacity: 0.9;
+    transform: translateY(-50%) scale(1.2) translateX(-1px);
+  }
+  100% {
+    opacity: 0.75;
+    transform: translateY(-50%) scale(1) translateX(0);
+  }
+}
+
+@keyframes theme-nudge {
+  0% { transform: translateX(0); }
+  55% { transform: translateX(6px); }
+  100% { transform: translateX(4px); }
+}
+
+@keyframes theme-backing-snap {
+  0% {
+    opacity: 0;
+    transform: scaleX(0.65) translateX(-14px);
+  }
+  50% {
+    opacity: 1;
+    transform: scaleX(1.03) translateX(2px);
+  }
+  100% {
+    opacity: 1;
+    transform: scaleX(1) translateX(0);
+  }
+}
+
+@keyframes card-nudge {
+  0% { transform: translateY(0) translateX(0); }
+  50% { transform: translateY(-3.5px) translateX(4.5px); }
+  100% { transform: translateY(-2px) translateX(3px); }
+}
+
+@keyframes card-backing-snap {
+  0% {
+    opacity: 0;
+    transform: scaleX(0.65) translateX(-16px);
+  }
+  50% {
+    opacity: 1;
+    transform: scaleX(1.03) translateX(2px);
+  }
+  100% {
+    opacity: 1;
+    transform: scaleX(1) translateX(0);
+  }
+}
+
+@keyframes accent-bar-snap {
+  0% {
+    opacity: 0;
+    transform: scaleY(0.3) translateX(-6px);
+  }
+  60% {
+    opacity: 1;
+    transform: scaleY(1.1) translateX(3px);
+  }
+  100% {
+    opacity: 0.85;
+    transform: scaleY(1) translateX(2px);
+  }
+}
+
+@keyframes arrow-nudge {
+  0% { transform: translateX(0); }
+  55% { transform: translateX(7px); }
+  100% { transform: translateX(4px); }
+}
+
 @keyframes arrive {
   from {
     opacity: 0;
@@ -793,7 +1024,17 @@ textarea::placeholder {
     scroll-behavior: auto !important;
   }
   .welcome,
-  .pending-view {
+  .pending-view,
+  nav button,
+  nav button::before,
+  nav button::after,
+  .nav-number,
+  .theme-option,
+  .theme-option::before,
+  .workspace-links button,
+  .workspace-links button::before,
+  .workspace-links button::after,
+  .workspace-links span {
     animation: none !important;
   }
 }

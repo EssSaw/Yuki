@@ -40,6 +40,11 @@ workspace, manual modes lock for the session without persistence. Sound/model
 integrations remain absent. Revalidated 3 UI tests, TypeScript/Vite build and diff
 formatting. Native release was last built for the prior design; use tauri dev to view
 the current stylesheet. No browser/native visual inspection or resource measurement
-yet. Await user visual review before extending the design to other work surfaces. Then resume configurable data root/project access
+yet. Follow-up hover correction adds single-run 180ms painted backing snap/slide
+and nudge/settle on enabled controls, with keyboard focus parity and reduced-motion
+overrides. Local reference clip was inspected without upload or imported game assets.
+Revalidated 3 tests and frontend build; exact perceived motion still needs user review.
+Next approved functional slice is data-location settings and selected project access;
+define persistence/relocation and file-access acceptance before implementing. Then resume configurable data root/project access
 and verified 9router connectivity. Future scope is not blanket approval for
 self-modification, remote sharing or system-wide access.
