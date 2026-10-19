@@ -20,8 +20,17 @@ Documentation requires relative-link and formatting checks plus staged-diff revi
 No app build applies until a scaffold exists. Integration research is documentary,
 not a successful 9router or Unity runtime connection.
 
-## Next action
+## Latest state and next action
 
-Verify/push the initial baseline, create/push dev, then resolve desktop stack and
-first bounded implementation slice with the user. Future scope is not blanket
-approval for autonomous self-modification, remote sharing or system-wide access.
+Documentation links/whitespace and staged diff checks passed. Local initial commit:
+`ef599c5`. HTTPS push failed because credentials could not be prompted; nothing was
+pushed and dev was not created. Origin is configured. The user reauthorized agent
+commits/pushes using the configured identity. A repeat push of master also failed
+because HTTPS credentials are unavailable noninteractively. Local main does not
+exist, explaining `src refspec main does not match any`; publish master instead.
+Resume dev creation only after master publication succeeds.
+
+User accepted incremental implementation, but desktop stack remains open: background
+resource efficiency is a priority. Compare a WebView-based shell with alternatives;
+do not invent memory benchmarks. Resolve the stack before scaffolding. Future scope
+is not blanket approval for self-modification, remote sharing or system-wide access.

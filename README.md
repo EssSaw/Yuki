@@ -26,7 +26,8 @@ from proposals and unresolved decisions. Future features are not current capabil
 ## Development
 
 `master` holds the initial documentation baseline. Application development happens
-on `dev`, with focused, verified commits. Build/test instructions will be added when
+on `dev` after the initial publication, with focused, verified commits and pushes
+using the configured Git identity. Build/test instructions will be added when
 the application stack is selected; no tool installation is required for these docs.
 
 Contributors and coding agents should start with [AGENTS.md](AGENTS.md).
