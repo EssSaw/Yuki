@@ -2,10 +2,10 @@
 
 ## State
 
-Documentation baseline only; no application scaffold or runtime tests yet.
-Read [product scope](product/scope.md) for user decisions and
-[boundaries](architecture/boundaries.md) for proposals. Resume the discovery
-interview before selecting the desktop stack or claiming an implementation plan approved.
+Tauri 2 + React/TypeScript + Rust approved and scaffolded. Chat-first navigation
+works; integrations are explicitly marked unavailable. Read [product scope](product/scope.md),
+[boundaries](architecture/boundaries.md) and [foundation acceptance](architecture/foundation.md).
+No model, filesystem, memory, scheduling or editor integration is implemented yet.
 
 ## Repository setup
 
@@ -29,7 +29,9 @@ verified at `71e21e2` before this handoff update. Current development branch: de
 tracking origin/dev. Existing remote main and the original license remain untouched.
 The user authorizes focused, verified agent commits/pushes using the configured identity.
 
-User accepted incremental implementation, but desktop stack remains open: background
-resource efficiency is a priority. Compare a WebView-based shell with alternatives;
-do not invent memory benchmarks. Resolve the stack before scaffolding. Future scope
-is not blanket approval for self-modification, remote sharing or system-wide access.
+Foundation validation: npm test (2 passed), npm run build, and native release build
+with npm run tauri build -- --no-bundle all passed. No installer build, visual desktop
+review or idle-resource measurement yet. Native executable: src-tauri/target/release/yuki.exe.
+Next slice: configurable data root and selected project access, then verified 9router
+connectivity; define acceptance before implementing. Future scope is not blanket
+approval for self-modification, remote sharing or system-wide access.

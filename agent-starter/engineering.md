@@ -40,7 +40,7 @@ Use relevant available skills; verify availability rather than relying on old in
 
 Handle bounded known-file work directly. For substantial coding and planning batches, split independent tasks and use multiple subagents wherever useful and supported by the host. Give each a precise scope, inputs, owned files/state, stop condition and acceptance checks. Parallelize only independent file/state scopes; serialize shared scenes, databases and other side effects. Verify returned evidence before claiming completion.
 
-Current user-requested model preferences: `9router/coding` for coding subagents and `9router/planning` for planning subagents. Verify these exact IDs are exposed by the host before dispatch. If unavailable, report the limitation and obtain approval for a substitute; do not silently map them to another model or claim to have used them. These preferences are revisable and do not authorize bypassing host restrictions.
+Current user-requested model preferences: `9router/coding` for coding subagents and `9router/planning` for planning subagents. If the exact IDs are unavailable, the user authorizes the exposed model named Coding or Gemini Flash 3.8 High for coding, and Planning or GPT 6.1 Sol (1M) for planning. Verify exposed IDs and context-tier support before dispatch, and report the actual selection; do not claim an unavailable model or context size was used. If none of these choices is available, report the blocker and obtain approval for a substitute. These preferences are revisable and do not authorize bypassing host restrictions.
 
 ## Context continuity
 

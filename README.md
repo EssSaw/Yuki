@@ -5,9 +5,10 @@ notes and canvas, and a local schedule in one standalone desktop app.
 
 ## Status
 
-Planning stage. There is no runnable application yet. Desktop technology and the
-first implementation slice are not yet approved. AI integration targets 9router;
-local storage does not imply local inference.
+Desktop foundation: Tauri 2 + React/TypeScript + Rust. Chat-first navigation is
+implemented; model connectivity, file access, notes/canvas, schedule and persisted
+settings are not yet implemented. AI integration targets 9router; local storage
+does not imply local inference.
 
 ## Product direction
 
@@ -27,8 +28,21 @@ from proposals and unresolved decisions. Future features are not current capabil
 
 `master` holds the initial documentation baseline. Application development happens
 on `dev` after the initial publication, with focused, verified commits and pushes
-using the configured Git identity. Build/test instructions will be added when
-the application stack is selected; no tool installation is required for these docs.
+using the configured Git identity.
+
+Prerequisites: Node/npm, Rust, Windows C++ Build Tools and WebView2.
+
+```powershell
+npm ci
+npm test
+npm run build
+npm run tauri dev
+```
+
+`npm run dev` previews the UI in a browser, not the native desktop integration.
+`npm run tauri build -- --no-bundle` compiles the Windows executable without an
+installer. Native build output is under `src-tauri/target/release/`.
+The foundation has no AI calls, file indexing or persistent data writes on startup.
 
 Contributors and coding agents should start with [AGENTS.md](AGENTS.md).
 

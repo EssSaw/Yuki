@@ -4,6 +4,7 @@ Read selectively; each topic has one authoritative home.
 
 - [Product scope](product/scope.md): confirmed intent, future scope and open questions.
 - [System boundaries](architecture/boundaries.md): proposed architecture and safety contracts.
+- [Desktop foundation](architecture/foundation.md): approved stack and first-slice acceptance.
 - [Integration research](research/integrations.md): primary sources and unverified assumptions.
 - [Current handoff](handoff.md): execution state, checks and next action.
 

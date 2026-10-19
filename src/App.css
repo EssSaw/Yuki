@@ -1,0 +1,48 @@
+﻿:root { font-family: "Bahnschrift", "Segoe UI", sans-serif; color: #233c38; background: #f7f5ee; font-synthesis: none; --ink: #233c38; --muted: #66746b; --line: #dedfd4; --accent: #b34e37; }
+* { box-sizing: border-box; }
+body { margin: 0; min-width: 320px; }
+button, textarea { font: inherit; }
+button { cursor: pointer; }
+button:focus-visible { outline: 3px solid var(--accent); outline-offset: 4px; }
+.workspace { display: grid; grid-template-columns: 244px 1fr; min-height: 100vh; }
+.sidebar { background: #e9ede3; border-right: 1px solid var(--line); padding: 38px 22px 24px; display: flex; flex-direction: column; }
+.brand { display: flex; align-items: center; gap: 12px; font-size: 29px; font-weight: 600; }
+.brand-mark { background: var(--ink); color: #f7f5ee; width: 46px; height: 46px; border-radius: 14px 14px 4px 14px; text-align: center; line-height: 46px; font-family: Georgia, serif; }
+.brand small { display: block; font-size: 8px; letter-spacing: 2px; margin-top: 5px; }
+.nav-label { font-size: 10px; letter-spacing: 2px; color: var(--muted); margin: 58px 12px 18px; }
+nav { display: grid; gap: 7px; }
+nav button { border: 0; background: transparent; text-align: left; padding: 14px 12px; border-radius: 8px; color: var(--ink); font-size: 14px; }
+nav button[aria-current] { background: #d9e1d2; font-weight: 600; }
+nav button:hover { background: #dfe5d8; }
+.nav-number { font-size: 10px; color: var(--muted); margin-right: 15px; }
+.sidebar-foot { margin-top: auto; padding: 50px 8px 0; font-size: 12px; }
+.sidebar-foot small { display: block; color: var(--muted); font-size: 10px; line-height: 1.6; margin-top: 10px; }
+.status-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: #698474; margin-right: 7px; }
+main { min-width: 0; background: radial-gradient(ellipse at 65% 20%, #e6e9d944, transparent 60%); }
+.topbar { height: 80px; border-bottom: 1px solid var(--line); display: flex; align-items: center; justify-content: space-between; padding: 0 36px; font-size: 13px; }
+.connection { font-size: 11px; color: var(--muted); border: 1px solid var(--line); border-radius: 20px; padding: 8px 13px; }
+.chat-view { min-height: calc(100vh - 80px); max-width: 900px; margin: auto; padding: 46px 44px 24px; display: flex; flex-direction: column; }
+.welcome { margin: auto 0; padding-bottom: 44px; animation: arrive .45s ease-out; }
+.portrait-placeholder { width: 65px; height: 65px; border-radius: 50%; border: 1px solid #bdc6b4; background: #e4e9da; font: italic 38px Georgia, serif; display: flex; align-items: center; justify-content: center; position: relative; margin-bottom: 28px; }
+.portrait-placeholder span { position: absolute; right: -6px; top: -3px; color: var(--accent); font: 32px Georgia, serif; }
+.eyebrow { letter-spacing: 2.4px; color: var(--accent); font-size: 10px; font-weight: 600; }
+h1 { font: normal clamp(36px, 4.5vw, 62px)/1.12 Georgia, "Times New Roman", serif; letter-spacing: -2px; margin: 20px 0; }
+.intro { font-size: 14px; line-height: 1.9; color: var(--muted); }
+.workspace-links { display: flex; gap: 12px; margin-top: 29px; flex-wrap: wrap; }
+.workspace-links button { background: transparent; border: 1px solid #d1d6c7; color: var(--ink); border-radius: 7px; padding: 13px 15px; font-size: 12px; }
+.workspace-links span { margin-left: 20px; color: var(--accent); }
+.composer { background: #fffcf6; border: 1px solid #cdd3c3; padding: 16px 18px 12px; border-radius: 12px; box-shadow: 0 5px 20px #233c3806; }
+.composer label { font-size: 11px; color: var(--muted); }
+textarea { display: block; width: 100%; border: 0; resize: none; padding: 12px 0 4px; background: transparent; color: var(--muted); font-size: 13px; }
+textarea::placeholder { color: #6b756c; opacity: 1; }
+.composer-footer { display: flex; align-items: center; gap: 12px; justify-content: space-between; }
+.composer-footer small { font-size: 10px; color: var(--muted); }
+.composer-footer button { border: 0; padding: 9px 14px; border-radius: 6px; color: #65705f; background: #e4e8dc; cursor: not-allowed; }
+.pending-view { max-width: 750px; margin: 100px auto; padding: 0 40px; }
+.pending-view > p { line-height: 1.8; }
+.pending-badge { display: inline-block; background: #e8ecdf; padding: 9px 13px; border-radius: 5px; font-size: 12px; margin: 18px 0; }
+.pending-note { font-size: 12px; color: var(--muted); }
+@keyframes arrive { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+@media (prefers-reduced-motion: reduce) { .welcome { animation: none; } }
+@media (max-width: 760px) { .workspace { grid-template-columns: 175px 1fr; } .sidebar { padding: 26px 12px; } .brand { font-size: 24px; } .brand small { font-size: 6px; } .nav-number { display: none; } .topbar { padding: 0 20px; } .chat-view { padding: 35px 22px 20px; } .connection { font-size: 9px; } }
+@media (max-width: 520px) { .workspace { display: block; } .sidebar { padding: 15px; border-right: 0; border-bottom: 1px solid var(--line); } .brand { font-size: 20px; } .brand-mark { width: 32px; height: 32px; line-height: 32px; } .nav-label, .sidebar-foot { display: none; } nav { display: flex; overflow-x: auto; margin-top: 15px; } nav button { flex-shrink: 0; padding: 10px; font-size: 11px; } .topbar { height: 58px; } .chat-view { min-height: calc(100vh - 180px); } .composer-footer small { max-width: 65%; line-height: 1.5; } .pending-view { margin-top: 50px; padding: 0 24px; } }
