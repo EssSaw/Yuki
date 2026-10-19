@@ -234,3 +234,8 @@
     transform: none;
   }
 }
+
+.chat-model-controls { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 14px; }
+.chat-model-controls select { flex: 1; min-width: 140px; max-width: 100%; padding: 8px; color: var(--ink); background: var(--bg-surface); border: 1px solid var(--line); border-radius: 10px; font: inherit; font-size: 12px; }
+.chat-model-controls button { padding: 8px 12px; border: 1px solid var(--line); border-radius: 12px; color: var(--ink); background: var(--bg-surface); }
+.chat-model-controls select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }

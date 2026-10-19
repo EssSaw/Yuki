@@ -56,5 +56,8 @@ In desktop Settings, choose a data folder, save the 9router base URL and optiona
 key, click Save connection & load models (saves the entered values before testing;
 a failed test does not roll them back), select a model from the unfiltered Discovered
 models dropdown or enter a custom ID, save settings, then send a non-sensitive
-test message. Test stop-generation and reopen the conversation after restart. Do not
+test message. Chat also provides an explicit Load models action and Chat model selector
+above the composer. Selection saves the model for subsequent turns without replacing
+the API key; model switching and sends are blocked while that save is in progress.
+Test stop-generation and reopen the conversation after restart. Do not
 paste credentials into chat. A locally routed endpoint may still use remote inference.

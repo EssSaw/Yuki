@@ -53,6 +53,26 @@ export default function ChatPanel({ onNavigate }: ChatPanelProps) {
   const [error, setError] = useState<string | null>(null);
   const [cancelError, setCancelError] = useState<string | null>(null);
   const [settings, setSettings] = useState<ChatSettings | null>(null);
+  const [models, setModels] = useState<string[]>([]);
+  const [modelBusy, setModelBusy] = useState(false);
+
+  async function loadModels() {
+    if (!desktop || isStreaming || modelBusy) return;
+    setModelBusy(true); setError(null);
+    try { setModels(await invoke<string[]>("list_chat_models")); }
+    catch (reason) { setError(String(reason)); }
+    finally { setModelBusy(false); }
+  }
+
+  async function selectModel(model: string) {
+    if (!settings || !model || isStreaming || modelBusy) return;
+    setModelBusy(true); setError(null);
+    try {
+      const saved = await invoke<ChatSettings>("save_chat_settings", { baseUrl: settings.baseUrl, model });
+      setSettings(saved);
+    } catch (reason) { setError(String(reason)); }
+    finally { setModelBusy(false); }
+  }
 
   const activeRequestIdRef = useRef<string | null>(null);
   const unlistenRef = useRef<UnlistenFn | null>(null);
@@ -151,7 +171,7 @@ export default function ChatPanel({ onNavigate }: ChatPanelProps) {
 
   async function handleSend(overrideContent?: string) {
     const textToSend = (overrideContent ?? input).trim();
-    if (!textToSend || isStreaming || !desktop) return;
+    if (!textToSend || isStreaming || modelBusy || !settings?.model || !desktop) return;
 
     const requestId = crypto.randomUUID();
     activeRequestIdRef.current = requestId;
@@ -401,6 +421,18 @@ export default function ChatPanel({ onNavigate }: ChatPanelProps) {
       )}
 
       <div className="composer">
+        <div className="chat-model-controls">
+          <label htmlFor="chat-active-model">Chat model</label>
+          <select id="chat-active-model" value={settings?.model ?? ""}
+            disabled={!desktop || isStreaming || modelBusy || !settings}
+            onChange={(event) => void selectModel(event.target.value)}>
+            <option value="" disabled>Select a model</option>
+            {settings?.model && !models.includes(settings.model) && <option value={settings.model}>{settings.model}</option>}
+            {models.map((model) => <option key={model} value={model}>{model}</option>)}
+          </select>
+          <button type="button" disabled={!desktop || isStreaming || modelBusy || !settings}
+            onClick={() => void loadModels()}>{modelBusy ? "Working..." : "Load models"}</button>
+        </div>
         <label htmlFor="message">Message Yuki</label>
         <textarea
           id="message"
@@ -449,7 +481,7 @@ export default function ChatPanel({ onNavigate }: ChatPanelProps) {
               type="button"
               onClick={() => void handleSend()}
               aria-label="Send message"
-              disabled={!desktop || isStreaming || !input.trim() || !settings?.model}
+              disabled={!desktop || isStreaming || modelBusy || !input.trim() || !settings?.model}
             >
               Send &gt;
             </button>
