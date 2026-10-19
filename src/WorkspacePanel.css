@@ -1,0 +1,17 @@
+.workspace-panel { padding: 40px clamp(22px, 5vw, 72px); max-width: 1000px; }
+.workspace-panel h1 { font-size: clamp(34px, 4vw, 56px); }
+.workspace-panel h2 { font: 24px Georgia, serif; margin-top: 30px; }
+.workspace-panel p { line-height: 1.7; }
+.workspace-panel button { padding: 10px 15px; border: 1px solid var(--line); border-radius: 14px 10px 16px 9px; color: var(--ink); background: var(--bg-surface); transition: transform 150ms ease; overflow-wrap: anywhere; text-align: left; }
+.workspace-panel button:hover:not(:disabled) { transform: translateY(-2px); }
+.workspace-panel button:disabled { cursor: not-allowed; opacity: .65; }
+.workspace-panel button[aria-pressed="true"] { border-color: var(--accent); }
+.path-label { overflow-wrap: anywhere; font-family: "Cascadia Code", Consolas, monospace; font-size: 13px; }
+.workspace-note { color: var(--muted); font-size: 12px; }
+.workspace-error { border-left: 3px solid #994659; padding: 12px; background: #fff0f0; color: #713343; overflow-wrap: anywhere; }
+.project-roots, .directory-view ul { list-style: none; padding: 0; }
+.project-roots li { display: flex; gap: 10px; margin: 12px 0; flex-wrap: wrap; }
+.directory-view { border-top: 1px solid var(--line); margin-top: 24px; }
+.directory-view li { margin: 10px 0; overflow-wrap: anywhere; }
+.directory-view small { color: var(--muted); margin-left: 8px; }
+@media (prefers-reduced-motion: reduce) { .workspace-panel button { transition: none; } .workspace-panel button:hover:not(:disabled) { transform: none; } }

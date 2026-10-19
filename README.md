@@ -6,8 +6,8 @@ notes and canvas, and a local schedule in one standalone desktop app.
 ## Status
 
 Desktop foundation: Tauri 2 + React/TypeScript + Rust. Chat-first navigation is
-implemented; model connectivity, file access, notes/canvas, schedule and persisted
-settings are not yet implemented. AI integration targets 9router; local storage
+implemented, with native data-folder settings and approved read-only project browsing.
+Model connectivity, file-content preview, notes/canvas and schedule are not yet implemented. AI integration targets 9router; local storage
 does not imply local inference.
 
 ## Product direction
@@ -42,7 +42,8 @@ npm run tauri dev
 `npm run dev` previews the UI in a browser, not the native desktop integration.
 `npm run tauri build -- --no-bundle` compiles the Windows executable without an
 installer. Native build output is under `src-tauri/target/release/`.
-The foundation has no AI calls, file indexing or persistent data writes on startup.
+No AI calls or file indexing run on startup. Local settings are written only through
+explicit folder approval/configuration actions; project source files remain read-only.
 
 Contributors and coding agents should start with [AGENTS.md](AGENTS.md).
 

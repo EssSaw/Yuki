@@ -6,6 +6,7 @@ Read selectively; each topic has one authoritative home.
 - [Visual direction](product/visual-direction.md): Watercolor Sketchbook design decisions and UI skill guidance.
 - [System boundaries](architecture/boundaries.md): proposed architecture and safety contracts.
 - [Desktop foundation](architecture/foundation.md): approved stack and first-slice acceptance.
+- [Workspace storage](architecture/workspace-storage.md): implemented folder settings, access boundaries and limits.
 - [Integration research](research/integrations.md): primary sources and unverified assumptions.
 - [Current handoff](handoff.md): execution state, checks and next action.
 

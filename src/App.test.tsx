@@ -37,7 +37,11 @@ describe("desktop foundation", () => {
     for (const section of ["Projects", "Notes & canvas", "Schedule", "Settings"]) {
       await user.click(screen.getByRole("button", { name: section }));
       expect(screen.getByRole("heading", { name: section })).toBeTruthy();
-      expect(screen.getByText("Not connected yet")).toBeTruthy();
+      if (section === "Projects" || section === "Settings") {
+        expect(screen.getByText(/Browser preview has no filesystem access/)).toBeTruthy();
+      } else {
+        expect(screen.getByText("Not connected yet")).toBeTruthy();
+      }
     }
     await user.click(screen.getByRole("button", { name: "Chat" }));
     expect(screen.getByRole("heading", { name: "A little space to think together." })).toBeTruthy();

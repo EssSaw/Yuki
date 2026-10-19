@@ -5,7 +5,9 @@
 Tauri 2 + React/TypeScript + Rust approved and scaffolded. Chat-first navigation
 works; integrations are explicitly marked unavailable. Read [product scope](product/scope.md),
 [boundaries](architecture/boundaries.md) and [foundation acceptance](architecture/foundation.md).
-No model, filesystem, memory, scheduling or editor integration is implemented yet.
+Native data-root settings and approved read-only project directory listing are implemented;
+see [workspace storage](architecture/workspace-storage.md). No model, file-content editing,
+memory, scheduling or Unity integration is implemented yet.
 
 ## Repository setup
 
@@ -44,7 +46,10 @@ yet. Follow-up hover correction adds single-run 180ms painted backing snap/slide
 and nudge/settle on enabled controls, with keyboard focus parity and reduced-motion
 overrides. Local reference clip was inspected without upload or imported game assets.
 Revalidated 3 tests and frontend build; exact perceived motion still needs user review.
-Next approved functional slice is data-location settings and selected project access;
-define persistence/relocation and file-access acceptance before implementing. Then resume configurable data root/project access
+Data-location settings and selected project access are now integrated: 15 Rust tests,
+6 frontend tests, frontend build and native release compilation passed. Picker/restart
+manual review remains pending. Nonempty/unavailable old data folders block relocation.
+User requested multiple coding subagents for future independent implementation tasks;
+rule saved. Next: user desktop review, then define 9router connectivity acceptance. Then resume configurable data root/project access
 and verified 9router connectivity. Future scope is not blanket approval for
 self-modification, remote sharing or system-wide access.

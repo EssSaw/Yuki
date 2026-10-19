@@ -1,5 +1,6 @@
 import { useState } from "react";
 import "./App.css";
+import WorkspacePanel from "./WorkspacePanel";
 
 const sections = ["Chat", "Projects", "Notes & canvas", "Schedule", "Settings"] as const;
 type Section = (typeof sections)[number];
@@ -57,6 +58,8 @@ function App() {
               <div className="composer-footer"><small>No model connected. Nothing is sent or saved.</small><button aria-label="Send message" disabled>Send &gt;</button></div>
             </div>
           </section>
+        ) : section === "Projects" || section === "Settings" ? (
+          <WorkspacePanel key={section} section={section} />
         ) : (
           <section className="pending-view" key={section}>
             <p className="eyebrow">FOUNDATION / {String(sections.indexOf(section) + 1).padStart(2, "0")}</p>
