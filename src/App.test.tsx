@@ -38,6 +38,7 @@ describe("desktop foundation", () => {
     expect(theme()).toBe("balanced");
     await user.click(screen.getByRole("button", { name: "Projects" }));
     expect(theme()).toBe("technical");
+    await user.click(screen.getByRole("button", { name: "Settings" }));
     await user.click(screen.getByRole("button", { name: "Creative" }));
     expect(theme()).toBe("creative");
     await user.click(screen.getByRole("button", { name: "Settings" }));

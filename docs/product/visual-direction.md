@@ -62,5 +62,41 @@ screen styles; replace obsolete rules rather than piling overrides onto them. Br
 pigment washes and subtle static paper grain live behind content, with level typography,
 compact toolbars and quiet boundaries across chat, settings and project browsing.
 
+## Approved Visual Checkpoint (Superseding Revisions)
+
+The approved visual checkpoint refines the watercolor sketchbook into a quiet, coherent desktop slice:
+- **Scenery & Observatory**: Sage scenery with muted blue and dusty pink sky (`/landscape.png`)
+  remains visible across the app, anchored to `right center` (`background-size: cover`) so the
+  observatory on the right remains preserved during responsive cropping.
+- **Continuous Reading Surface**: Reading surfaces use a continuous, mostly opaque cool ivory
+  soft-edge surface (cool-ivory gradient and diffuse edges, without a panel border)
+  to ensure quiet, high-legibility reading while letting the scenery frame the space.
+- **Open Assistant & Subtle Blue User Messages**: Assistant messages sit open directly on the
+  ivory surface without cards, borders, or glass. User messages use a subtle muted blue wash
+  (`var(--muted-blue-bg)`) with soft rounded corners. Glassmorphism and card stacks are eliminated.
+- **Compact Humanist Typography & Wordmark**: Standardized on compact humanist UI typography
+  (`Candara`, `Calibri`, `Trebuchet MS` fallback), discarding oversized serif headings. Brand uses a small,
+  expressive Yuki wordmark (`y.` mark with refined type).
+- **Clean Controls & Illustrated Highlights**: Icons and controls are crisp geometric SVGs,
+  not hand-drawn sketches. Only the landscape art and stepped highlight silhouettes are illustrated.
+- **Stepped Silhouette & Static Targets**: Hover and focus feedback uses a stepped few-silhouette
+  continuous three-silhouette redraw (`720ms steps(1, end) infinite`), while button bounds, text, and click targets stay completely static.
+  Active nav items have a static backing wash. Reduced-motion preferences force immediate static display.
+- **Collapsed Icon Rail Default**: The sidebar defaults to a compact 64px icon rail, persisting the
+  user's expand/collapse choice in `localStorage` (`yuki.sidebar_collapsed`). All navigation and
+  sections remain accessible in both states. Appearance controls live in Settings, not navigation.
+- **Retained Functional Slice**: All model selection, 9router connection settings, streaming chat,
+  cancellation, retry, and history deletion behaviors are preserved intact.
+
+UI design and implementation use a Hard UI subagent, with primary-assistant coordination,
+integration and validation; see the model-selection rule in [AGENTS.md](../../AGENTS.md).
+This supersedes the earlier primary-assistant-only UI preference.
+The first checkpoint requires desktop and narrow-width visual
+review before propagation, commits or pushes. The integrated title bar provides native drag, minimize, maximize/restore and close
+controls, with visible action failures. Native chrome is disabled. Subtle pointer-driven
+landscape parallax and short workspace entrance transitions respect reduced motion.
+User accepted the overall look, readability pass and expanded-sidebar fit on 2026-10-19.
+Full native-control and narrow-width interaction acceptance remain to be documented.
+
 Apply reviewed skill guidance and verify the working prototype before committing.
 The user will review this slice before the design is propagated to other work surfaces.

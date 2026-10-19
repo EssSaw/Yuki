@@ -332,27 +332,64 @@ export default function ChatPanel({ onNavigate }: ChatPanelProps) {
       aria-label={messages.length > 0 ? "Chat conversation" : undefined}
     >
       <div className="chat-history-bar">
-        <div className="chat-heading"><span className="chat-heading-mark" aria-hidden="true">?</span><div><strong>Yuki</strong><small>A little space to think together</small></div></div>
+        <div className="chat-heading">
+          <span className="chat-heading-mark" aria-hidden="true">✦</span>
+          <div>
+            <strong>Yuki</strong>
+            <small>A little space to think together</small>
+          </div>
+        </div>
         <div className="chat-header-actions">
-          <button type="button" onClick={() => setHistoryOpen(!historyOpen)} aria-expanded={historyOpen}>Conversations <span>{conversations.length}</span></button>
-          <button type="button" className="new-chat-btn" onClick={handleNewChat} disabled={!desktop || isStreaming || deleting}>+ New chat</button>
+          <button type="button" onClick={() => setHistoryOpen(!historyOpen)} aria-expanded={historyOpen}>
+            Conversations <span>{conversations.length}</span>
+          </button>
+          <button type="button" className="new-chat-btn" onClick={handleNewChat} disabled={!desktop || isStreaming || deleting}>
+            + New chat
+          </button>
         </div>
       </div>
-      {historyOpen && <section className="conversation-drawer" aria-label="Recent conversations">
-        <div className="conversation-drawer-heading"><strong>Your conversations</strong><button onClick={() => setHistoryOpen(false)} aria-label="Close conversations">Close</button></div>
-        {!conversations.length && <p>No saved conversations yet.</p>}
-        {conversations.map((conversation) => <div className="conversation-row" key={conversation.id}>
-          <button type="button" aria-pressed={conversation.id === activeConversationId} disabled={isStreaming || deleting}
-            onClick={() => { void reopenConversation(conversation.id); setHistoryOpen(false); }}>{conversation.title || "Untitled conversation"}</button>
-          <button type="button" className="conversation-delete" aria-label={`Delete conversation: ${conversation.title || "Untitled conversation"}`}
-            disabled={isStreaming || deleting} onClick={() => setDeleteTarget(conversation)}>Delete</button>
-        </div>)}
-      </section>}
-      {deleteTarget && <section className="delete-confirmation" role="alertdialog" aria-labelledby="delete-title" aria-describedby="delete-detail">
-        <strong id="delete-title">Delete this conversation?</strong>
-        <p id="delete-detail">?{deleteTarget.title || "Untitled conversation"}? and its saved history will be permanently removed. Project files stay untouched.</p>
-        <div><button disabled={deleting} onClick={() => setDeleteTarget(null)}>Keep conversation</button><button className="confirm-delete" disabled={deleting || isStreaming} onClick={() => void deleteConversation()}>{deleting ? "Deleting?" : "Delete permanently"}</button></div>
-      </section>}
+      {historyOpen && (
+        <section className="conversation-drawer" aria-label="Recent conversations">
+          <div className="conversation-drawer-heading">
+            <strong>Your conversations</strong>
+            <button onClick={() => setHistoryOpen(false)} aria-label="Close conversations">Close</button>
+          </div>
+          {!conversations.length && <p>No saved conversations yet.</p>}
+          {conversations.map((conversation) => (
+            <div className="conversation-row" key={conversation.id}>
+              <button
+                type="button"
+                aria-pressed={conversation.id === activeConversationId}
+                disabled={isStreaming || deleting}
+                onClick={() => { void reopenConversation(conversation.id); setHistoryOpen(false); }}
+              >
+                {conversation.title || "Untitled conversation"}
+              </button>
+              <button
+                type="button"
+                className="conversation-delete"
+                aria-label={`Delete conversation: ${conversation.title || "Untitled conversation"}`}
+                disabled={isStreaming || deleting}
+                onClick={() => setDeleteTarget(conversation)}
+              >
+                Delete
+              </button>
+            </div>
+          ))}
+        </section>
+      )}
+      {deleteTarget && (
+        <section className="delete-confirmation" role="alertdialog" aria-labelledby="delete-title" aria-describedby="delete-detail">
+          <strong id="delete-title">Delete this conversation?</strong>
+          <p id="delete-detail">"{deleteTarget.title || "Untitled conversation"}" and its saved history will be permanently removed. Project files stay untouched.</p>
+          <div>
+            <button disabled={deleting} onClick={() => setDeleteTarget(null)}>Keep conversation</button>
+            <button className="confirm-delete" disabled={deleting || isStreaming} onClick={() => void deleteConversation()}>
+              {deleting ? "Deleting…" : "Delete permanently"}
+            </button>
+          </div>
+        </section>
+      )}
 
       {!desktop && (
         <p className="browser-warning" role="status">
@@ -375,7 +412,8 @@ export default function ChatPanel({ onNavigate }: ChatPanelProps) {
       {messages.length === 0 ? (
         <div className="welcome">
           <div className="portrait-placeholder" aria-label="Avatar placeholder">
-            Y<span aria-hidden="true">*</span>
+            <span className="portrait-mark">Y</span>
+            <span className="portrait-spark" aria-hidden="true">✦</span>
           </div>
           <p className="eyebrow">AT YOUR PACE, ON YOUR TERMS</p>
           <h1 id="welcome-title">
@@ -474,9 +512,15 @@ export default function ChatPanel({ onNavigate }: ChatPanelProps) {
               type="button"
               onClick={() => void handleSend()}
               aria-label="Send message"
+              className="send-button"
               disabled={!desktop || deleting || isStreaming || modelBusy || !input.trim() || !settings?.model}
             >
-              <span aria-hidden="true">?</span>
+              <span className="send-icon" aria-hidden="true">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                  <line x1="22" y1="2" x2="11" y2="13" />
+                  <polygon points="22 2 15 22 11 13 2 9 22 2" />
+                </svg>
+              </span>
             </button>
           </div>
         </div>

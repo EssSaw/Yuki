@@ -1,34 +1,71 @@
+:root {
+  --text-body: 16px;
+  --text-control: 14px;
+  --text-secondary: 13px;
+  --text-caption: 12px;
+  --control-height: 36px;
+}
+
 * {
-  box-sizing:border-box;
+  box-sizing: border-box;
 }
 body {
-  margin:0;
-  min-width:360px;
+  margin: 0;
+  min-width: 360px;
+  font-family: "Candara", "Calibri", "Trebuchet MS", sans-serif;
+  font-size: var(--text-body);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
-button,input,textarea,select {
-  font:inherit;
+button, input, textarea, select {
+  font: inherit;
+  color: inherit;
 }
 button {
-  cursor:pointer;
+  cursor: pointer;
+  border: 0;
+  background: none;
+  padding: 0;
 }
 button:disabled {
-  cursor:not-allowed;
-  opacity:.45;
+  cursor: not-allowed;
+  opacity: 0.45;
 }
-button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-visible {
-  outline:2px solid var(--accent,#9d566d);
-  outline-offset:3px;
+button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible {
+  outline: 2px solid var(--accent, #9c576d);
+  outline-offset: 2px;
 }
 button {
-  transition:background-color 160ms,transform 160ms;
+  transition: background-color 160ms ease, border-color 160ms ease, color 160ms ease, opacity 160ms ease;
 }
+/* Click targets and text remain static - no shift or transform on active */
 button:active:not(:disabled) {
-  transform:translateY(1px);
+  transform: none;
 }
-@media(prefers-reduced-motion:reduce) {
-  *,*::before,*::after {
-    animation:none!important;
-    transition:none!important;
-    scroll-behavior:auto!important
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+.workspace[data-window-hidden="true"] *,
+.workspace[data-window-hidden="true"] *::before,
+.workspace[data-window-hidden="true"] *::after {
+  animation-play-state: paused !important;
+}
+.workspace[data-window-hidden="true"]::before {
+  transition: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation: none !important;
+    transition: none !important;
+    scroll-behavior: auto !important;
   }
 }

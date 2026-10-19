@@ -1,5 +1,25 @@
 # Current handoff
 
+## Current checkpoint (2026-10-19)
+
+User accepted the overall UI, readability improvements and sidebar fit, and requested
+moving on. UI slice is ready for a focused commit on dev: scenery, stepped highlights,
+native title bar, larger typography, Settings/Projects integration and 260px expanded
+sidebar (64px collapsed). Final frontend validation: 37 tests passed, production build
+passed. Native release compiled earlier; latest readability/sidebar changes have not
+been rebuilt into that executable. Native-control and narrow-layout acceptance are
+not fully documented; user visual feedback is not an automated screenshot check.
+UI subagents must use Hard UI per AGENTS.md.
+
+Next functional scope is not implemented: autonomous read-only file access with no
+arbitrary total file-size cap (bounded range reads/context), no writes or commands.
+User requests broad non-OS local access and per-project provider-sharing approval.
+Local storage does not make model requests local: distinguish local disk access from
+9router/upstream transmission before finalizing the access contract. Existing secret
+and system restrictions must not be relaxed implicitly. No file-preview or AI-access
+code belongs in the UI commit. Historical entries below retain earlier checkpoint
+limitations and superseded preferences; this section is the current summary.
+
 ## State
 
 Tauri 2 + React/TypeScript + Rust approved and scaffolded. Chat-first navigation
@@ -81,7 +101,111 @@ Parent replaced App/Chat/Settings/Workspace styles with a cohesive shared waterc
 system: open transcript, muted washes, static grain, compact controls and consistent
 spacing. 26 frontend tests, frontend build and native Windows release rebuild pass. Browser
 visual tooling is not installed, so no screenshot acceptance is claimed.
-Manual visual review remains pending. Notes scope question was interrupted and is not
-approved for implementation. Do not delete real history during tests. Future scope
-and verified 9router connectivity. Future scope is not blanket approval for
-self-modification, remote sharing or system-wide access.
+Visual checkpoint in progress: in-app header, sidebar, empty and populated chat slice
+implemented in accordance with the latest user approvals. Scenery image copied to `public/landscape.png`
+from user-supplied artifact, preserving the observatory at the right via `right center` background crop.
+Reading surface refactored into a continuous mostly opaque cool ivory soft-edge surface; assistant text is
+open without cards or glass; user messages styled in subtle muted blue. Compact humanist typography adopted
+across UI and headings, discarding oversized serifs; small expressive Yuki wordmark applied. Navigation
+and controls use clean vector SVG icons, with stepped few-silhouette hover/focus reveals on static click targets.
+Sidebar defaults to collapsed 64px icon rail with remembered user choice in localStorage. Functional
+9router connection settings, model picker, streaming chat, cancellation, and history deletion remain fully intact.
+Validation: 52 native tests passed (`cargo test`), 32 frontend tests passed (`vitest run`, 26 existing + 6 new
+regression tests in `src/VisualCheckpoint.test.tsx`), TypeScript and Vite production build passed cleanly (`npm run build`).
+Package tools inspected; no browser screenshot runner is installed in devDependencies, so no automated visual
+verification is claimed. Desktop visual review remains pending. No Git commit or push performed; initial `target/`
+status preserved.
+
+Primary assistant refinement: moved appearance controls into Settings, selected local
+Candara/Calibri humanist typography, softened the reading surface, fixed chat width plus
+margins overflowing narrow viewports, corrected the mobile grid, and guarded preference
+reads when localStorage is blocked. Added storage-failure regression coverage.
+Revalidated npm test (33 passed) and npm run build. Native custom titlebar and actual
+desktop/narrow screenshot inspection remain pending; do not call this visually approved.
+User requires the primary assistant to personally handle subsequent UI implementation.
+No commit or push before visual approval.
+
+Primary assistant implemented the missing continuous stepped highlight loop for navigation,
+welcome shortcuts, New chat and enabled Send; labels and hit targets remain stationary.
+Added pointer-driven scenery parallax, short workspace transitions, native drag region and
+minimize/maximize/close controls with error feedback and narrowly scoped Tauri permissions.
+Native chrome disabled; removed misleading connection-status dot. Reduced motion disables
+animation and parallax. Verified 34 frontend tests, frontend production build, native
+release build (--no-bundle), and diff whitespace checks. No screenshot/browser inspection
+or native window interaction acceptance yet; these remain required before visual approval.
+No commit or push. The earlier pending-titlebar implementation note is superseded by this entry.
+
+Context refresh: reread repository/starter instructions and visual checkpoint decisions.
+User gave positive visual feedback on the current look; preserve it rather than redesigning.
+This does not establish narrow-width or native-control acceptance. Primary assistant
+closed the remaining hidden-window motion gap: visibility changes pause decorative CSS
+animations, with listener cleanup on unmount and regression coverage. Targeted checkpoint
+suite: 9 tests passed; frontend build and diff checks passed. Native executable predates
+this last visibility refinement. Continue with narrow-width/native interaction acceptance
+before propagation or publication; no new feature scope has been approved.
+
+Updated user preference: UI work must call a Hard UI subagent, superseding the earlier
+primary-assistant-only restriction. The authoritative model-selection rule is in
+[AGENTS.md](../AGENTS.md); primary assistant remains responsible for integration and
+validation. No UI implementation was performed as part of this rule update.
+
+Readability pass (2026-10-19): preserved the existing visual checkpoint and dirty work.
+Updated `src/design-system.css`, `src/App.css` and `src/ChatPanel.css` in place:
+shared body/chat/composer text is 16px (previous chat 14/14.5px), controls 14px,
+secondary text 13px, captions 12px (previously 9-10.5px). Chat line-height is
+1.7 assistant / 1.65 user; composer 1.6. Sidebar/topbar toggles are 36px,
+send is 40px (was 32px), nav retains 44px targets, and titlebar is 48px.
+Header actions wrap; composer model text can shrink; model popover is bounded
+inside composer width with viewport-height scrolling; history rows wrap long
+names and preserve delete targets. Narrow layouts retain the readable type scale.
+Scenery, humanist family, stepped highlights, reduced motion and hidden-window
+pause remain intact. Added `src/Typography.test.js` for source-level size and
+popover constraints; this is not a browser layout test.
+Final validation: `npm test -- src\\Typography.test.js src\\VisualCheckpoint.test.tsx
+src\\App.test.tsx src\\ChatPanel.model.test.tsx src\\ChatPanel.delete.test.tsx`
+passed 31 tests across 5 files; `npm run build` passed TypeScript and Vite (29
+modules); `git diff --check` passed. An initial CSS raw-import assertion was
+unsupported by the test transform; the final standalone JS test reads the CSS
+without adding Node types or dependencies. No provider requests, personal data,
+commit/push, or native build. Existing native rebuild was not touched. Browser
+screenshot tooling remains unavailable; desktop/narrow visual acceptance and
+native rendering of this new scale remain pending.
+
+Settings / Projects continuation (2026-10-19): extended the accepted scenery and
+cool-ivory direction without changing runtime behavior. Replaced the old serif,
+undersized rules in `src/ConnectionSettings.css` and `src/WorkspacePanel.css`:
+16px form/body text, 14px controls/paths, 12-13px supporting labels, 40px buttons
+and 44px form fields. Settings and Projects now use continuous opaque ivory
+surfaces with landscape margins, open sections and quiet row separators rather
+than nested cards. Long paths/errors wrap; project actions stack at narrow widths;
+connection actions wrap/stack and mood choices wrap without reducing type size.
+Removed project-button lift so targets stay stationary. Existing global keyboard
+focus, reduced motion and hidden-window pause remain authoritative.
+Minimal shared changes in `src/App.css` give Settings its surface and align mood
+controls; `src/App.tsx` moves the existing local Settings heading/data section
+before appearance controls, leaving handlers, guards and component keys intact.
+No connection/project/data-root logic, chat or shell redesign, dependencies,
+provider requests or personal-data access. All pre-existing dirty work, including
+`target/`, was preserved; no commit/push or native rebuild.
+Validation: `npm test -- src\ConnectionSettings.test.tsx
+src\ConnectionSettings.failure.test.tsx src\WorkspacePanel.test.tsx
+src\App.test.tsx src\VisualCheckpoint.test.tsx` passed 32 tests in 5 files.
+`npm run build` passed TypeScript and Vite (29 modules); `git diff --check`
+passed; editor diagnostics reported no errors in the four edited source files.
+`npm test -- src\Typography.test.js` also passed its readability regression.
+Browser screenshots and desktop/narrow visual inspection were not performed;
+CSS layout and native rendering still need user review. Stop after this slice.
+
+Expanded-sidebar clipping follow-up (2026-10-19): inspected the supplied read-only
+screenshot and current App source. `src/App.css` increases expanded width from
+220px to 260px; brand subtitle, navigation labels and footer text can wrap rather
+than clip/ellipsis. Font sizes are unchanged. The 64px collapsed rail, stored
+preference logic and mobile horizontally scrolling navigation are unchanged;
+mobile labels explicitly stay on one line. No `App.tsx` changes were needed.
+Extended `src/Typography.test.js` with source-level width/wrapping/mobile guards.
+Validation: 29 tests passed across Typography, VisualCheckpoint and App suites;
+`npm run build` passed TypeScript/Vite (29 modules); `git diff --check` passed.
+An initial newline-sensitive assertion failed on CRLF and was corrected before
+rerunning. These are source/DOM checks, not rendered layout acceptance; no browser
+or native visual validation/rebuild was performed. Preserved existing dirty work,
+attachments and `target/`; no dependencies, commit or push. Bounded fix complete.
