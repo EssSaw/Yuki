@@ -12,9 +12,12 @@ const descriptions: Record<Exclude<Section, "Chat">, string> = {
 
 function App() {
   const [section, setSection] = useState<Section>("Chat");
+  const [themeMode, setThemeMode] = useState<"Auto" | "Technical" | "Creative">("Auto");
+  const automaticTheme = section === "Projects" ? "technical" : section === "Notes & canvas" ? "creative" : "balanced";
+  const theme = themeMode === "Auto" ? automaticTheme : themeMode.toLowerCase();
 
   return (
-    <div className="workspace">
+    <div className="workspace" data-theme={theme}>
       <aside className="sidebar">
         <div className="brand"><span className="brand-mark" aria-hidden="true">y.</span><span>Yuki<small>YOUR PERSONAL SPACE</small></span></div>
         <p className="nav-label">WORKSPACE</p>
@@ -25,7 +28,14 @@ function App() {
             </button>
           ))}
         </nav>
-        <div className="sidebar-foot"><span className="status-dot" />Foundation preview<small>Local shell. No background AI activity.</small></div>
+        <fieldset className="theme-controls">
+          <legend className="theme-legend">WORKSPACE MOOD</legend>
+          {(["Auto", "Technical", "Creative"] as const).map((mode) => (
+            <button className="theme-option" key={mode} aria-pressed={themeMode === mode} onClick={() => setThemeMode(mode)}>{mode}</button>
+          ))}
+          <p className="theme-description">{themeMode === "Auto" ? "Follows your workspace." : "Locked to your choice."} Session only.</p>
+        </fieldset>
+        <div className="sidebar-foot"><span className="status-dot" />Design preview<small>Local shell. No background AI activity.</small></div>
       </aside>
       <main>
         <header className="topbar"><span>{section}</span><span className="connection">9router not connected</span></header>
@@ -48,7 +58,7 @@ function App() {
             </div>
           </section>
         ) : (
-          <section className="pending-view">
+          <section className="pending-view" key={section}>
             <p className="eyebrow">FOUNDATION / {String(sections.indexOf(section) + 1).padStart(2, "0")}</p>
             <h1>{section}</h1>
             <p>{descriptions[section]}</p>

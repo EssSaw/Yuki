@@ -14,6 +14,23 @@ describe("desktop foundation", () => {
     expect(screen.getByText("9router not connected")).toBeTruthy();
   });
 
+  it("follows workspace palettes only in Auto mode", async () => {
+    const user = userEvent.setup();
+    const { container } = render(<App />);
+    const theme = () => container.querySelector(".workspace")?.getAttribute("data-theme");
+    expect(theme()).toBe("balanced");
+    await user.click(screen.getByRole("button", { name: "Projects" }));
+    expect(theme()).toBe("technical");
+    await user.click(screen.getByRole("button", { name: "Creative" }));
+    expect(theme()).toBe("creative");
+    await user.click(screen.getByRole("button", { name: "Settings" }));
+    expect(theme()).toBe("creative");
+    await user.click(screen.getByRole("button", { name: "Auto" }));
+    expect(theme()).toBe("balanced");
+    await user.click(screen.getByRole("button", { name: "Notes & canvas" }));
+    expect(theme()).toBe("creative");
+  });
+
   it("navigates planned sections and returns to chat", async () => {
     const user = userEvent.setup();
     render(<App />);
