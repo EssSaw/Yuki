@@ -43,12 +43,13 @@ export default function ConnectionSettings() {
   }, [desktop]);
 
   async function handleTestConnection() {
-    if (!desktop) return;
+    if (!desktop || isTesting || isSaving) return;
     setIsTesting(true);
     setErrorMessage("");
     setStatusMessage("");
 
     try {
+      await persistSettings();
       const models = await invoke<string[]>("list_chat_models");
       setAvailableModels(models || []);
       setStatusMessage(`Connected: ${models?.length ?? 0} model(s) discovered.`);
@@ -62,15 +63,7 @@ export default function ConnectionSettings() {
     }
   }
 
-  async function handleSave(e?: React.FormEvent) {
-    if (e) e.preventDefault();
-    if (!desktop) return;
-
-    setIsSaving(true);
-    setErrorMessage("");
-    setStatusMessage("");
-
-    try {
+  async function persistSettings() {
       const payload: {
         baseUrl: string;
         model: string;
@@ -93,6 +86,19 @@ export default function ConnectionSettings() {
       setHasApiKey(Boolean(saved.hasApiKey));
       setApiKey(""); // Erase state after successful save
       setClearApiKey(false);
+      return saved;
+  }
+
+  async function handleSave(e?: React.FormEvent) {
+    if (e) e.preventDefault();
+    if (!desktop) return;
+
+    setIsSaving(true);
+    setErrorMessage("");
+    setStatusMessage("");
+
+    try {
+      await persistSettings();
       setStatusMessage("Settings saved successfully.");
     } catch (err) {
       setErrorMessage(String(err));
@@ -135,7 +141,7 @@ export default function ConnectionSettings() {
             value={baseUrl}
             onChange={(e) => setBaseUrl(e.target.value)}
             placeholder="http://localhost:8000/v1"
-            disabled={!desktop || isSaving}
+            disabled={!desktop || isSaving || isTesting}
           />
         </div>
 
@@ -151,7 +157,7 @@ export default function ConnectionSettings() {
                 ? "•••••••• (Key configured - leave blank to keep)"
                 : "Enter API key"
             }
-            disabled={!desktop || isSaving || clearApiKey}
+            disabled={!desktop || isSaving || isTesting || clearApiKey}
             autoComplete="off"
           />
           {hasApiKey && (
@@ -163,7 +169,7 @@ export default function ConnectionSettings() {
                   setClearApiKey(e.target.checked);
                   if (e.target.checked) setApiKey("");
                 }}
-                disabled={!desktop || isSaving}
+                disabled={!desktop || isSaving || isTesting}
               />
               Remove saved API key
             </label>
@@ -178,7 +184,7 @@ export default function ConnectionSettings() {
             value={model}
             onChange={(e) => setModel(e.target.value)}
             placeholder="e.g. gpt-4o or claude-3-5-sonnet"
-            disabled={!desktop || isSaving}
+            disabled={!desktop || isSaving || isTesting}
             list="available-models-list"
           />
           {availableModels.length > 0 && (
@@ -190,6 +196,7 @@ export default function ConnectionSettings() {
           )}
         </div>
 
+        <p className="workspace-note">Save connection &amp; load models uses the endpoint and key entered above, saving them before testing. A failed test does not undo the saved connection.</p>
         <div className="settings-actions">
           <button
             type="button"
@@ -197,12 +204,12 @@ export default function ConnectionSettings() {
             onClick={handleTestConnection}
             disabled={!desktop || isTesting || isSaving}
           >
-            {isTesting ? "Testing..." : "Test connection & load models"}
+            {isTesting ? "Testing..." : "Save connection & load models"}
           </button>
           <button
             type="submit"
             className="save-btn"
-            disabled={!desktop || isSaving}
+            disabled={!desktop || isSaving || isTesting}
           >
             {isSaving ? "Saving..." : "Save settings"}
           </button>

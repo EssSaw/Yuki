@@ -80,7 +80,7 @@ describe("browser preview disabled state", () => {
     await user.click(screen.getByRole("button", { name: "Settings" }));
     expect(screen.getByText(/Open the desktop app to configure 9router connection/)).toBeTruthy();
     expect(screen.getByRole("button", { name: "Save settings" }).hasAttribute("disabled")).toBe(true);
-    expect(screen.getByRole("button", { name: "Test connection & load models" }).hasAttribute("disabled")).toBe(true);
+    expect(screen.getByRole("button", { name: "Save connection & load models" }).hasAttribute("disabled")).toBe(true);
   });
 });
 
@@ -129,6 +129,7 @@ describe("9router connection settings", () => {
       if (command === "get_workspace_settings") {
         return { dataRoot: null, projectRoots: [] };
       }
+      if (command === "save_chat_settings") { return { baseUrl: "http://localhost:8000/v1", model: "", hasApiKey: false }; }
       if (command === "list_chat_models") {
         return ["gpt-4o", "claude-3-5-sonnet"];
       }
@@ -139,7 +140,7 @@ describe("9router connection settings", () => {
     render(<App />);
     await user.click(screen.getByRole("button", { name: "Settings" }));
 
-    await user.click(screen.getByRole("button", { name: "Test connection & load models" }));
+    await user.click(screen.getByRole("button", { name: "Save connection & load models" }));
 
     expect(invoke).toHaveBeenCalledWith("list_chat_models");
     expect(await screen.findByText(/Connected: 2 model\(s\) discovered\./)).toBeTruthy();
@@ -155,6 +156,7 @@ describe("9router connection settings", () => {
       if (command === "get_workspace_settings") {
         return { dataRoot: null, projectRoots: [] };
       }
+      if (command === "save_chat_settings") { return { baseUrl: "http://localhost:8000/v1", model: "", hasApiKey: false }; }
       if (command === "list_chat_models") {
         throw new Error("Connection refused by 9router");
       }
@@ -165,7 +167,7 @@ describe("9router connection settings", () => {
     render(<App />);
     await user.click(screen.getByRole("button", { name: "Settings" }));
 
-    await user.click(screen.getByRole("button", { name: "Test connection & load models" }));
+    await user.click(screen.getByRole("button", { name: "Save connection & load models" }));
 
     expect(await screen.findByRole("alert")).toHaveProperty(
       "textContent",

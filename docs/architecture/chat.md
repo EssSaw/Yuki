@@ -53,6 +53,7 @@ long-term memory extraction, file attachment, tool calling or background inferen
 ## Manual setup
 
 In desktop Settings, choose a data folder, save the 9router base URL and optional API
-key, explicitly load available models, select/save a model, then send a non-sensitive
+key, click Save connection & load models (saves the entered values before testing;
+a failed test does not roll them back), select/save a model, then send a non-sensitive
 test message. Test stop-generation and reopen the conversation after restart. Do not
 paste credentials into chat. A locally routed endpoint may still use remote inference.
