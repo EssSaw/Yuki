@@ -185,14 +185,23 @@ export default function ConnectionSettings() {
             onChange={(e) => setModel(e.target.value)}
             placeholder="e.g. gpt-4o or claude-3-5-sonnet"
             disabled={!desktop || isSaving || isTesting}
-            list="available-models-list"
           />
           {availableModels.length > 0 && (
-            <datalist id="available-models-list">
-              {availableModels.map((m) => (
-                <option key={m} value={m} />
-              ))}
-            </datalist>
+            <>
+              <label htmlFor="discovered-models">Discovered models</label>
+              <select
+                id="discovered-models"
+                value={availableModels.includes(model) ? model : ""}
+                onChange={(e) => { if (e.target.value) setModel(e.target.value); }}
+                disabled={!desktop || isSaving || isTesting}
+              >
+                <option value="" disabled>Choose from all {availableModels.length} models</option>
+                {availableModels.map((m) => (
+                  <option key={m} value={m}>{m}</option>
+                ))}
+              </select>
+              <small>Browse every discovered model here, or enter a custom ID above. Save settings to use your selection.</small>
+            </>
           )}
         </div>
 

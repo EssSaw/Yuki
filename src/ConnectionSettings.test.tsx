@@ -12,7 +12,7 @@ it("saves entered endpoint and key before testing instead of testing old localho
     calls.push(command);
     if (command === "get_chat_settings") return { baseUrl: "http://127.0.0.1:20128/v1", model: "", hasApiKey: false };
     if (command === "save_chat_settings") return { baseUrl: "https://router.example/v1", model: "", hasApiKey: true };
-    if (command === "list_chat_models") return ["test-model"];
+    if (command === "list_chat_models") return Array.from({ length: 89 }, (_, i) => `test-model-${i}`);
     return null;
   });
   const user = userEvent.setup();
@@ -21,7 +21,11 @@ it("saves entered endpoint and key before testing instead of testing old localho
   await user.clear(endpoint); await user.type(endpoint, "https://router.example/v1");
   await user.type(screen.getByLabelText("API Key"), "fixture-key-not-secret");
   await user.click(screen.getByRole("button", { name: /connection.*load models/i }));
-  await screen.findByText(/Connected: 1 model/);
+  await screen.findByText(/Connected: 89 model/);
   expect(invoke).toHaveBeenCalledWith("save_chat_settings", { baseUrl: "https://router.example/v1", model: "", apiKey: "fixture-key-not-secret" });
   expect(calls.indexOf("save_chat_settings")).toBeLessThan(calls.indexOf("list_chat_models"));
+  expect(screen.getByRole("combobox", { name: "Discovered models" })).toBeTruthy();
+  expect(screen.getAllByRole("option")).toHaveLength(90);
+  await user.selectOptions(screen.getByRole("combobox", { name: "Discovered models" }), "test-model-88");
+  expect(screen.getByLabelText("Model")).toHaveProperty("value", "test-model-88");
 });
