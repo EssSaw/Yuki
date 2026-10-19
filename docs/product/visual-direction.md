@@ -1,21 +1,26 @@
-# Visual direction: Dream Arcade
+# Visual direction: Watercolor Sketchbook
 
 ## Confirmed direction
 
-Original Persona 5 Royal-inspired interaction energy, not copied assets/layouts:
-snappy menu transitions, oversized display typography, hover/cursor reactions and
-layered graphic cutouts. Pastel, dreamy blue and pink; not babyish, cyberpunk or a
-generic AI dashboard. Expressive framing must not compromise readable work surfaces.
+The user rejected the Dream Arcade prototype as too neon/cyberpunk and sharp.
+Current direction supersedes that treatment: warm paper, pale watercolor pigment
+washes, hand-painted accents and soft organic panels with occasional brushed edges.
+Use muted powder blue and dusty rose; no jagged cutouts, thick black outlines,
+near-black/neon technical palette or condensed all-caps display typography.
 
-Themes respond to workspace intent: technical work uses more blue/deeper tones;
-creative work uses more pink/lighter tones. Exact section mapping and user overrides
-are still open. Conversation-aware AI theme suggestions are future scope, not permission
-to change the interface unexpectedly.
+Retain original Persona-inspired button responsiveness, not its geometry/assets:
+snappy soft brushstroke hover reveals, subtle lift and gentle slide/fade transitions.
+Keep elegant readable typography and calm text surfaces; texture stays out of dense
+code/document text. Mature and dreamy, not babyish or a generic pastel dashboard.
+
+Themes respond to workspace intent: technical uses muted slate-blue structure on
+light paper; creative uses lighter rose washes. Conversation-aware AI suggestions
+are future scope and must not unexpectedly change the interface.
 
 Two complementary layouts are accepted: an expressive chat home and a denser project
 workspace; avatar small/collapsible during focused work. Short directional transitions,
 no perpetual animation behind reading/code, reduced-motion support and no hidden-window
-animation. Sound behavior remains unconfirmed.
+animation. Sound is optional/on by default when implemented, as specified below.
 
 ## Skill selection and application
 
@@ -35,12 +40,12 @@ needed. Browser-only SSR/URL guidance is not automatically applicable to this de
 ## Approved prototype
 
 Implement one chat-home/navigation prototype for review before extending the redesign
-to full notes/canvas/code layouts. Strongly angled navigation, overlapping display
-labels and punchy layered transitions are requested; document/code text stays level.
+to full notes/canvas/code layouts. Soft organic navigation and painted hover feedback
+replace angled panels/overlapping labels; all text stays level and unobscured.
 Use a large abstract portrait placeholder on chat home and compact/collapsible character
 framing during active work, until an original/licensed portrait is supplied.
 
-User delegated palette mapping: Projects default to Technical (deeper blue), Notes &
+User delegated palette mapping: Projects default to Technical (muted slate blue), Notes &
 canvas to Creative (light pink), Schedule/Settings to balanced neutral, and Chat to
 balanced blue/pink. Auto follows navigation; Technical/Creative manual overrides stay
 locked until changed, with gentle transitions and no content-driven changes while typing.

@@ -32,13 +32,14 @@ The user authorizes focused, verified agent commits/pushes using the configured 
 Foundation validation: npm test (2 passed), npm run build, and native release build
 with npm run tauri build -- --no-bundle all passed. No installer build, visual desktop
 review or idle-resource measurement yet. Native executable: src-tauri/target/release/yuki.exe.
-Completed prototype: user-approved Dream Arcade chat-home/navigation redesign; see
-[visual direction](product/visual-direction.md). Parent implemented theme behavior/tests;
-Coding subagent completed App.css after a failed initial model configuration. Auto
-follows workspace; manual modes stay locked for this session, without persistence.
-Sound and model integrations remain absent. Combined validation: 3 UI tests passed,
-TypeScript/Vite build passed, native Windows release build passed. No browser/native
-visual inspection or measured idle resource usage yet. Await user visual review before
-spreading this design to other working surfaces. Then resume configurable data root/project access
+Current prototype: Watercolor Sketchbook supersedes Dream Arcade, which the user
+rejected as neon/cyberpunk and too sharp. See [visual direction](product/visual-direction.md).
+Coding subagent replaced App.css with light paper, powder-blue/dusty-rose washes,
+organic panels and painted hover reveals. Theme behavior is unchanged: Auto follows
+workspace, manual modes lock for the session without persistence. Sound/model
+integrations remain absent. Revalidated 3 UI tests, TypeScript/Vite build and diff
+formatting. Native release was last built for the prior design; use tauri dev to view
+the current stylesheet. No browser/native visual inspection or resource measurement
+yet. Await user visual review before extending the design to other work surfaces. Then resume configurable data root/project access
 and verified 9router connectivity. Future scope is not blanket approval for
 self-modification, remote sharing or system-wide access.
