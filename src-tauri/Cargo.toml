@@ -22,6 +22,13 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 rfd = "0.15"
 dunce = "1.0"
+keyring = { version = "4.2.0", features = ["v1", "windows-native-keyring-store"], default-features = false }
+reqwest = { version = "0.13.5", features = ["json", "stream"] }
+futures-util = "0.3.34"
+uuid = { version = "1.28.0", features = ["v4", "serde"] }
+chrono = { version = "0.4.45", features = ["serde"] }
+url = "2.5.8"
+tokio = { version = "1.53.3", features = ["sync", "macros"] }
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration

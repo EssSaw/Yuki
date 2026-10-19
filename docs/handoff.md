@@ -50,6 +50,15 @@ Data-location settings and selected project access are now integrated: 15 Rust t
 6 frontend tests, frontend build and native release compilation passed. Picker/restart
 manual review remains pending. Nonempty/unavailable old data folders block relocation.
 User requested multiple coding subagents for future independent implementation tasks;
-rule saved. Next: user desktop review, then define 9router connectivity acceptance. Then resume configurable data root/project access
+rule saved. Current approved slice: [9router chat](architecture/chat.md), including explicit
+connection settings, model discovery, streaming/cancel and local original history.
+Two Coding agents delivered native and frontend separately; parent reconciled contracts
+and corrected cancellation acknowledgement, active-guard error cleanup and unconfirmed
+stream-end behavior. Validation: 34 native tests, 21 frontend tests, TypeScript/Vite
+build and native Windows release build passed. No real provider requests or private-data
+transmission during development. Manual acceptance still needed: Windows credential
+storage, actual 9router model/stream support, cancel/reopen and restart persistence.
+See chat documentation for setup and current limitations. No automatic project context
+or tool execution in this slice. Then resume configurable data root/project access
 and verified 9router connectivity. Future scope is not blanket approval for
 self-modification, remote sharing or system-wide access.

@@ -7,7 +7,9 @@ notes and canvas, and a local schedule in one standalone desktop app.
 
 Desktop foundation: Tauri 2 + React/TypeScript + Rust. Chat-first navigation is
 implemented, with native data-folder settings and approved read-only project browsing.
-Model connectivity, file-content preview, notes/canvas and schedule are not yet implemented. AI integration targets 9router; local storage
+9router connection settings, model discovery, streaming text chat and original local
+conversation history are implemented. File-content preview, notes/canvas, schedule
+and long-term memory retrieval are not yet implemented. AI integration targets 9router; local storage
 does not imply local inference.
 
 ## Product direction

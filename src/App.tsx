@@ -1,5 +1,7 @@
 import { useState } from "react";
 import "./App.css";
+import ChatPanel from "./ChatPanel";
+import ConnectionSettings from "./ConnectionSettings";
 import WorkspacePanel from "./WorkspacePanel";
 
 const sections = ["Chat", "Projects", "Notes & canvas", "Schedule", "Settings"] as const;
@@ -39,27 +41,16 @@ function App() {
         <div className="sidebar-foot"><span className="status-dot" />Design preview<small>Local shell. No background AI activity.</small></div>
       </aside>
       <main>
-        <header className="topbar"><span>{section}</span><span className="connection">9router not connected</span></header>
+        <header className="topbar"><span>{section}</span><span className="connection">9router</span></header>
         {section === "Chat" ? (
-          <section className="chat-view" aria-labelledby="welcome-title">
-            <div className="welcome">
-              <div className="portrait-placeholder" aria-label="Avatar placeholder">Y<span aria-hidden="true">*</span></div>
-              <p className="eyebrow">AT YOUR PACE, ON YOUR TERMS</p>
-              <h1 id="welcome-title">A little space to <br />think together.</h1>
-              <p className="intro">Code, collect an idea, or untangle a plan.<br />This is the beginning of your space with Yuki.</p>
-              <div className="workspace-links">
-                <button onClick={() => setSection("Projects")}>Explore a project <span aria-hidden="true">&gt;</span></button>
-                <button onClick={() => setSection("Notes & canvas")}>Make room for an idea <span aria-hidden="true">&gt;</span></button>
-              </div>
-            </div>
-            <div className="composer">
-              <label htmlFor="message">Message Yuki</label>
-              <textarea id="message" placeholder="Chat becomes available when your model is connected." disabled rows={2} />
-              <div className="composer-footer"><small>No model connected. Nothing is sent or saved.</small><button aria-label="Send message" disabled>Send &gt;</button></div>
-            </div>
-          </section>
-        ) : section === "Projects" || section === "Settings" ? (
-          <WorkspacePanel key={section} section={section} />
+          <ChatPanel onNavigate={setSection} />
+        ) : section === "Projects" ? (
+          <WorkspacePanel key="Projects" section="Projects" />
+        ) : section === "Settings" ? (
+          <div className="settings-panel">
+            <WorkspacePanel key="Settings" section="Settings" />
+            <ConnectionSettings />
+          </div>
         ) : (
           <section className="pending-view" key={section}>
             <p className="eyebrow">FOUNDATION / {String(sections.indexOf(section) + 1).padStart(2, "0")}</p>
