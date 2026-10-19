@@ -1,0 +1,10 @@
+# Documentation map
+
+Read selectively; each topic has one authoritative home.
+
+- [Product scope](product/scope.md): confirmed intent, future scope and open questions.
+- [System boundaries](architecture/boundaries.md): proposed architecture and safety contracts.
+- [Integration research](research/integrations.md): primary sources and unverified assumptions.
+- [Current handoff](handoff.md): execution state, checks and next action.
+
+Do not treat a proposal, research finding or roadmap item as an implemented feature.
