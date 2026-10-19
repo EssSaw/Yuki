@@ -76,6 +76,11 @@ popover/composer and conversation drawer, per user override after picker agent c
 Native deletion agent supplied UUID-bound deletion and recovery-artifact cleanup with
 active-request exclusion. Parent added confirmation and failure-preservation UI tests.
 Verified: 52 native tests, 26 frontend tests, frontend and Windows release builds.
+User requested a whole-interface visual rework after rejecting the accumulated design.
+Parent replaced App/Chat/Settings/Workspace styles with a cohesive shared watercolor
+system: open transcript, muted washes, static grain, compact controls and consistent
+spacing. 26 frontend tests, frontend build and native Windows release rebuild pass. Browser
+visual tooling is not installed, so no screenshot acceptance is claimed.
 Manual visual review remains pending. Notes scope question was interrupted and is not
 approved for implementation. Do not delete real history during tests. Future scope
 and verified 9router connectivity. Future scope is not blanket approval for

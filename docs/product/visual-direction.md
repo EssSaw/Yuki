@@ -56,5 +56,11 @@ UI sound is optional and on by default when implemented, with a visible mute con
 Sound assets/implementation are not required for the first visual prototype; show no
 misleading active sound control. Motion must respect reduced-motion preferences.
 
+Implementation refinement: use open paper-like surfaces instead of enclosing every
+message/control in cards. Maintain one shared token/reset stylesheet and cohesive
+screen styles; replace obsolete rules rather than piling overrides onto them. Broad
+pigment washes and subtle static paper grain live behind content, with level typography,
+compact toolbars and quiet boundaries across chat, settings and project browsing.
+
 Apply reviewed skill guidance and verify the working prototype before committing.
 The user will review this slice before the design is propagated to other work surfaces.
