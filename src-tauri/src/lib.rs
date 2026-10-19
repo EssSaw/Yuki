@@ -18,6 +18,7 @@ pub fn run() {
             chat::commands::list_chat_models,
             chat::commands::list_conversations,
             chat::commands::load_conversation,
+            chat::commands::delete_conversation,
             chat::commands::start_chat,
             chat::commands::cancel_chat,
         ])

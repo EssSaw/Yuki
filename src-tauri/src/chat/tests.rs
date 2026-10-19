@@ -8,7 +8,8 @@ use super::client::{
 use super::commands::{load_chat_config, save_chat_config_atomic};
 use super::credentials::{MockSecretStore, SERVICE_NAME, SecretStore, USER_NAME};
 use super::history::{
-    get_conversations_dir, list_conversations_from_disk, load_conversation_from_disk,
+    delete_conversation_from_disk, get_conversations_dir, is_matching_conversation_file,
+    is_symlink_or_reparse, list_conversations_from_disk, load_conversation_from_disk,
     save_conversation_atomic, validate_conversation_id,
 };
 use super::models::{ChatConfig, ChatMessage, ConversationDetail, MessageRole, MessageStatus};
@@ -1253,4 +1254,484 @@ async fn test_execute_chat_stream_explicit_error_in_stream_fails() {
     let loaded = load_conversation_from_disk(&data_root, &conv_id).unwrap();
     assert_eq!(loaded.messages.len(), 2);
     assert_eq!(loaded.messages[1].status, MessageStatus::Failed);
+}
+
+// ---------------------------------------------------------------------------
+// 9. Conversation Deletion Backend Tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_is_matching_conversation_file_logic() {
+    let id = "e89b12d3-a456-4266-b456-426614174000";
+    let other_id = "00000000-0000-0000-0000-000000000000";
+
+    assert!(is_matching_conversation_file(&format!("{id}.json"), id));
+    assert!(is_matching_conversation_file(&format!(".{id}.json"), id));
+    assert!(is_matching_conversation_file(
+        &format!(".{id}.bak_123_456"),
+        id
+    ));
+    assert!(is_matching_conversation_file(
+        &format!(".{id}.tmp_123_456"),
+        id
+    ));
+    assert!(is_matching_conversation_file(&format!("{id}.bak"), id));
+    assert!(is_matching_conversation_file(&format!("{id}.tmp"), id));
+    assert!(is_matching_conversation_file(&format!("{id}.json.bak"), id));
+    assert!(is_matching_conversation_file(&format!("{id}.json.tmp"), id));
+
+    // Case insensitivity
+    assert!(is_matching_conversation_file(
+        &format!("{}.JSON", id.to_uppercase()),
+        id
+    ));
+
+    // Non-matching
+    assert!(!is_matching_conversation_file(
+        &format!("{other_id}.json"),
+        id
+    ));
+    assert!(!is_matching_conversation_file(
+        &format!(".{other_id}.bak_1"),
+        id
+    ));
+    assert!(!is_matching_conversation_file("chat_settings.json", id));
+    assert!(!is_matching_conversation_file("settings.json", id));
+    assert!(!is_matching_conversation_file("README.md", id));
+    assert!(!is_matching_conversation_file(
+        &format!("{id}_unrelated.txt"),
+        id
+    ));
+    assert!(!is_matching_conversation_file(&format!("{id}.txt"), id));
+}
+
+#[test]
+fn test_delete_conversation_invalid_id() {
+    let env = TestEnv::new("delete_invalid_id");
+    let data_root = env.data_root();
+
+    let invalid_ids = [
+        "",
+        "not-a-uuid",
+        "../traversal",
+        "../../etc/passwd",
+        "12345",
+        "123e4567-e89b-12d3-a456-42661417400g",
+        "123e4567-e89b-12d3-a456",
+        "123e4567-e89b-12d3-a456-426614174000/extra",
+    ];
+
+    for bad_id in invalid_ids {
+        let res = delete_conversation_from_disk(&data_root, bad_id);
+        assert!(res.is_err(), "Expected error for invalid ID '{bad_id}'");
+        let err = res.unwrap_err();
+        assert!(
+            err.contains("Invalid conversation ID"),
+            "Expected 'Invalid conversation ID' error message, got: {err}"
+        );
+    }
+}
+
+#[test]
+fn test_delete_conversation_correct_deletion() {
+    let env = TestEnv::new("delete_correct");
+    let data_root = env.data_root();
+
+    let id = uuid::Uuid::new_v4().to_string();
+    let conv = ConversationDetail {
+        id: id.clone(),
+        title: "To Be Deleted".to_string(),
+        updated_at: "2026-10-19T12:00:00Z".to_string(),
+        messages: vec![ChatMessage {
+            id: uuid::Uuid::new_v4().to_string(),
+            role: MessageRole::User,
+            content: "Please delete me".to_string(),
+            status: MessageStatus::Complete,
+        }],
+    };
+
+    save_conversation_atomic(&data_root, &conv).unwrap();
+    let conv_dir = get_conversations_dir(&data_root).unwrap();
+    let primary_file = conv_dir.join(format!("{id}.json"));
+    assert!(primary_file.exists());
+
+    // Verify it loads and lists
+    assert_eq!(load_conversation_from_disk(&data_root, &id).unwrap().id, id);
+    assert_eq!(list_conversations_from_disk(&data_root).unwrap().len(), 1);
+
+    // Perform deletion
+    let del_res = delete_conversation_from_disk(&data_root, &id);
+    assert!(del_res.is_ok(), "Deletion should succeed");
+
+    // Primary file is gone
+    assert!(!primary_file.exists());
+
+    // Cannot load
+    let load_err = load_conversation_from_disk(&data_root, &id);
+    assert!(load_err.is_err());
+    assert!(load_err.unwrap_err().contains("not found"));
+
+    // Listing is empty
+    assert!(list_conversations_from_disk(&data_root).unwrap().is_empty());
+}
+
+#[test]
+fn test_delete_conversation_backup_and_temp_cleanup() {
+    let env = TestEnv::new("delete_backup_cleanup");
+    let data_root = env.data_root();
+    let conv_dir = get_conversations_dir(&data_root).unwrap();
+
+    let id = uuid::Uuid::new_v4().to_string();
+    let conv = ConversationDetail {
+        id: id.clone(),
+        title: "Backup Cleanup Test".to_string(),
+        updated_at: "2026-10-19T12:00:00Z".to_string(),
+        messages: vec![ChatMessage {
+            id: uuid::Uuid::new_v4().to_string(),
+            role: MessageRole::User,
+            content: "Recoverable content".to_string(),
+            status: MessageStatus::Complete,
+        }],
+    };
+
+    save_conversation_atomic(&data_root, &conv).unwrap();
+
+    // Create lingering backup and temp files matching this ID
+    let serialized = serde_json::to_string_pretty(&conv).unwrap();
+    let bak1 = conv_dir.join(format!(".{id}.bak_1234_5678"));
+    let bak2 = conv_dir.join(format!("{id}.bak"));
+    let bak3 = conv_dir.join(format!("{id}.json.bak"));
+    let tmp1 = conv_dir.join(format!(".{id}.tmp_1234_5678"));
+    let tmp2 = conv_dir.join(format!("{id}.tmp"));
+    let tmp3 = conv_dir.join(format!("{id}.json.tmp"));
+
+    std::fs::write(&bak1, &serialized).unwrap();
+    std::fs::write(&bak2, &serialized).unwrap();
+    std::fs::write(&bak3, &serialized).unwrap();
+    std::fs::write(&tmp1, b"partial tmp data").unwrap();
+    std::fs::write(&tmp2, b"partial tmp data").unwrap();
+    std::fs::write(&tmp3, b"partial tmp data").unwrap();
+
+    // Verify lingering backup allows recovery if primary file is missing
+    let primary_file = conv_dir.join(format!("{id}.json"));
+    std::fs::remove_file(&primary_file).unwrap();
+    let recovered = load_conversation_from_disk(&data_root, &id).unwrap();
+    assert_eq!(recovered.id, id);
+
+    // Re-create primary file
+    std::fs::write(&primary_file, &serialized).unwrap();
+
+    // Perform deletion
+    delete_conversation_from_disk(&data_root, &id).unwrap();
+
+    // Assert primary and ALL backup/temp files are gone
+    assert!(!primary_file.exists());
+    assert!(!bak1.exists());
+    assert!(!bak2.exists());
+    assert!(!bak3.exists());
+    assert!(!tmp1.exists());
+    assert!(!tmp2.exists());
+    assert!(!tmp3.exists());
+
+    // Verify conversation cannot resurrect from lingering backup
+    let load_res = load_conversation_from_disk(&data_root, &id);
+    assert!(load_res.is_err());
+    assert!(load_res.unwrap_err().contains("not found"));
+}
+
+#[test]
+fn test_delete_conversation_unrelated_preserved() {
+    let env = TestEnv::new("delete_unrelated_preserved");
+    let data_root = env.data_root();
+    let conv_dir = get_conversations_dir(&data_root).unwrap();
+
+    let id_a = uuid::Uuid::new_v4().to_string();
+    let id_b = uuid::Uuid::new_v4().to_string();
+
+    let conv_a = ConversationDetail {
+        id: id_a.clone(),
+        title: "Conversation A".to_string(),
+        updated_at: "2026-10-19T10:00:00Z".to_string(),
+        messages: vec![ChatMessage {
+            id: uuid::Uuid::new_v4().to_string(),
+            role: MessageRole::User,
+            content: "Hello A".to_string(),
+            status: MessageStatus::Complete,
+        }],
+    };
+
+    let conv_b = ConversationDetail {
+        id: id_b.clone(),
+        title: "Conversation B".to_string(),
+        updated_at: "2026-10-19T11:00:00Z".to_string(),
+        messages: vec![ChatMessage {
+            id: uuid::Uuid::new_v4().to_string(),
+            role: MessageRole::User,
+            content: "Hello B".to_string(),
+            status: MessageStatus::Complete,
+        }],
+    };
+
+    save_conversation_atomic(&data_root, &conv_a).unwrap();
+    save_conversation_atomic(&data_root, &conv_b).unwrap();
+
+    // Add backup for conversation B
+    let bak_b = conv_dir.join(format!(".{id_b}.bak_9999_8888"));
+    std::fs::write(&bak_b, serde_json::to_string(&conv_b).unwrap()).unwrap();
+
+    // Add unrelated files in conversations dir
+    let notes = conv_dir.join("notes.txt");
+    std::fs::write(&notes, b"keep this safe").unwrap();
+
+    // Add unrelated config files in data root
+    let settings_file = data_root.join("settings.json");
+    std::fs::write(&settings_file, b"{\"theme\":\"dark\"}").unwrap();
+
+    // Delete conversation A
+    delete_conversation_from_disk(&data_root, &id_a).unwrap();
+
+    // Conversation A is deleted
+    assert!(load_conversation_from_disk(&data_root, &id_a).is_err());
+
+    // Conversation B is 100% intact
+    let loaded_b = load_conversation_from_disk(&data_root, &id_b).unwrap();
+    assert_eq!(loaded_b.id, id_b);
+    assert_eq!(loaded_b.title, "Conversation B");
+    assert!(bak_b.exists());
+
+    // Unrelated files in conversations dir and data root are preserved
+    assert!(notes.exists());
+    assert_eq!(std::fs::read_to_string(&notes).unwrap(), "keep this safe");
+    assert!(settings_file.exists());
+    assert_eq!(
+        std::fs::read_to_string(&settings_file).unwrap(),
+        "{\"theme\":\"dark\"}"
+    );
+
+    // Listing still returns conversation B
+    let list = list_conversations_from_disk(&data_root).unwrap();
+    assert_eq!(list.len(), 1);
+    assert_eq!(list[0].id, id_b);
+}
+
+#[test]
+fn test_delete_conversation_repeat_deletion_idempotent() {
+    let env = TestEnv::new("delete_idempotent");
+    let data_root = env.data_root();
+
+    let valid_id = uuid::Uuid::new_v4().to_string();
+
+    // Case 1: conversations directory does not even exist yet
+    let res0 = delete_conversation_from_disk(&data_root, &valid_id);
+    assert!(
+        res0.is_ok(),
+        "Must succeed idempotently when conv dir does not exist"
+    );
+
+    // Create conversations dir
+    let _ = get_conversations_dir(&data_root).unwrap();
+
+    // Case 2: ID never existed
+    let res1 = delete_conversation_from_disk(&data_root, &valid_id);
+    assert!(
+        res1.is_ok(),
+        "Must succeed idempotently when ID never existed"
+    );
+
+    // Case 3: Create, delete, then repeat deletion
+    let conv = ConversationDetail {
+        id: valid_id.clone(),
+        title: "Idempotent".to_string(),
+        updated_at: "2026-10-19T12:00:00Z".to_string(),
+        messages: Vec::new(),
+    };
+    save_conversation_atomic(&data_root, &conv).unwrap();
+
+    assert!(delete_conversation_from_disk(&data_root, &valid_id).is_ok());
+    assert!(delete_conversation_from_disk(&data_root, &valid_id).is_ok());
+    assert!(delete_conversation_from_disk(&data_root, &valid_id).is_ok());
+
+    // Case 4: Non-existent data root should fail (requires valid data root)
+    let non_existent_root = env.root.join("missing_dir");
+    let res_err = delete_conversation_from_disk(&non_existent_root, &valid_id);
+    assert!(res_err.is_err());
+    assert!(
+        res_err
+            .unwrap_err()
+            .contains("does not exist or is unavailable")
+    );
+}
+
+#[test]
+fn test_delete_conversation_busy_request_rejected() {
+    let store = MockSecretStore::new();
+    let state = ChatState::new(store);
+
+    let conv_id = uuid::Uuid::new_v4().to_string();
+    let req_id = "req-busy-check";
+
+    // Start request
+    let _rx = state.try_start_request(req_id, &conv_id).unwrap();
+
+    // Attempting deletion under active guard must reject
+    {
+        let active_guard = state.inner.active.lock().unwrap();
+        assert!(active_guard.is_some());
+        let active = active_guard.as_ref().unwrap();
+        let err = format!(
+            "Cannot delete conversation while a chat request ('{}') is active.",
+            active.request_id
+        );
+        assert!(err.contains("req-busy-check"));
+    }
+
+    // Finish request
+    state.finish_request(req_id);
+
+    // Active guard is now clear
+    {
+        let active_guard = state.inner.active.lock().unwrap();
+        assert!(active_guard.is_none());
+    }
+
+    // Atomic lock exclusivity check: while delete holds the lock, try_start_request cannot start
+    {
+        let _guard = state.inner.active.lock().unwrap();
+        let state_clone = state.clone();
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let handle = std::thread::spawn(move || {
+            started_tx.send(()).unwrap();
+            state_clone.try_start_request("req-contended", "conv-x")
+        });
+
+        started_rx.recv().unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        drop(_guard);
+
+        let result = handle.join().unwrap();
+        assert!(result.is_ok());
+        state.finish_request("req-contended");
+    }
+}
+
+#[test]
+fn test_delete_conversation_unsafe_link_policy() {
+    let env = TestEnv::new("unsafe_link");
+    let data_root = env.data_root();
+    let outside_dir = env.root.join("outside_secret");
+    std::fs::create_dir_all(&outside_dir).unwrap();
+    let secret_file = outside_dir.join("secret_data.txt");
+    std::fs::write(&secret_file, b"TOP_SECRET_CREDENTIALS").unwrap();
+
+    let valid_id = uuid::Uuid::new_v4().to_string();
+
+    // 1. Test symlinked / junction conversations directory
+    let conv_dir = data_root.join("conversations");
+    #[cfg(windows)]
+    let junction_created = {
+        let target_str = outside_dir.to_string_lossy();
+        let link_str = conv_dir.to_string_lossy();
+        std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J", &link_str, &target_str])
+            .output()
+            .map(|out| out.status.success())
+            .unwrap_or(false)
+    };
+    #[cfg(unix)]
+    let junction_created = std::os::unix::fs::symlink(&outside_dir, &conv_dir).is_ok();
+
+    if junction_created {
+        assert!(is_symlink_or_reparse(&conv_dir).unwrap());
+        let res = delete_conversation_from_disk(&data_root, &valid_id);
+        assert!(res.is_err(), "Must reject junction conversations directory");
+        let err = res.unwrap_err();
+        assert!(
+            err.contains("symlink or reparse point") || err.contains("rejecting"),
+            "Error should cite symlink or reparse point, got: {err}"
+        );
+        assert!(secret_file.exists());
+        assert_eq!(
+            std::fs::read_to_string(&secret_file).unwrap(),
+            "TOP_SECRET_CREDENTIALS"
+        );
+
+        #[cfg(windows)]
+        let _ = std::process::Command::new("cmd")
+            .args(["/C", "rmdir", &conv_dir.to_string_lossy()])
+            .output();
+        #[cfg(unix)]
+        let _ = std::fs::remove_file(&conv_dir);
+    }
+
+    // 2. Test symlinked conversation file
+    let conv_dir = get_conversations_dir(&data_root).unwrap();
+    let file_link = conv_dir.join(format!("{valid_id}.json"));
+
+    #[cfg(windows)]
+    let file_link_created = std::os::windows::fs::symlink_file(&secret_file, &file_link).is_ok();
+    #[cfg(unix)]
+    let file_link_created = std::os::unix::fs::symlink(&secret_file, &file_link).is_ok();
+
+    if file_link_created {
+        assert!(is_symlink_or_reparse(&file_link).unwrap());
+        let res = delete_conversation_from_disk(&data_root, &valid_id);
+        assert!(res.is_err(), "Must reject symlinked conversation file");
+        let err = res.unwrap_err();
+        assert!(
+            err.contains("symlink or reparse point") || err.contains("rejecting"),
+            "Error should cite symlink or reparse point, got: {err}"
+        );
+        assert!(secret_file.exists());
+        assert_eq!(
+            std::fs::read_to_string(&secret_file).unwrap(),
+            "TOP_SECRET_CREDENTIALS"
+        );
+    }
+}
+
+#[test]
+fn test_delete_conversation_reports_partial_filesystem_errors() {
+    let env = TestEnv::new("delete_partial_fs_err");
+    let data_root = env.data_root();
+    let conv_dir = get_conversations_dir(&data_root).unwrap();
+
+    let id = uuid::Uuid::new_v4().to_string();
+    let conv = ConversationDetail {
+        id: id.clone(),
+        title: "Partial Error Test".to_string(),
+        updated_at: "2026-10-19T12:00:00Z".to_string(),
+        messages: Vec::new(),
+    };
+    save_conversation_atomic(&data_root, &conv).unwrap();
+
+    let bak_file = conv_dir.join(format!(".{id}.bak_lock_test"));
+    std::fs::write(&bak_file, b"backup data").unwrap();
+
+    #[cfg(windows)]
+    let _locked_file = {
+        use std::os::windows::fs::OpenOptionsExt;
+        std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .share_mode(0)
+            .open(&bak_file)
+            .ok()
+    };
+
+    let res = delete_conversation_from_disk(&data_root, &id);
+
+    #[cfg(windows)]
+    {
+        if _locked_file.is_some() {
+            assert!(res.is_err(), "Must report partial filesystem error");
+            let err = res.unwrap_err();
+            assert!(
+                err.contains("Errors encountered") || err.contains("Failed to delete"),
+                "Error should report failed deletion, got: {err}"
+            );
+        }
+    }
+
+    #[cfg(windows)]
+    drop(_locked_file);
 }

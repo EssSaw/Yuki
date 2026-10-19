@@ -70,5 +70,13 @@ Separate Coding agents owned Rust and CSS; parent integrated and verified 43 nat
 and 24 frontend tests plus frontend build. Native Windows release rebuild passed.
 No actual endpoint requests or personal history inspected. Await user desktop visual
 review and a fresh non-sensitive chat test; don't claim screenshots/runtime acceptance. Then resume configurable data root/project access
+
+Chat usability slice complete: parent directly redesigned the compact searchable model
+popover/composer and conversation drawer, per user override after picker agent cancellation.
+Native deletion agent supplied UUID-bound deletion and recovery-artifact cleanup with
+active-request exclusion. Parent added confirmation and failure-preservation UI tests.
+Verified: 52 native tests, 26 frontend tests, frontend and Windows release builds.
+Manual visual review remains pending. Notes scope question was interrupted and is not
+approved for implementation. Do not delete real history during tests. Future scope
 and verified 9router connectivity. Future scope is not blanket approval for
 self-modification, remote sharing or system-wide access.

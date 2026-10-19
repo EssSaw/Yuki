@@ -383,3 +383,43 @@
   transform: none !important;
   box-shadow: none !important;
 }
+
+/* Chat controls share a quiet toolbar rather than a settings form. */
+.chat-heading { display: flex; align-items: center; gap: 10px; }
+.chat-heading strong { display: block; font: 23px Georgia, serif; }
+.chat-heading small { display: block; font-size: 11px; color: var(--muted); margin-top: 3px; }
+.chat-heading-mark { font: 32px Georgia, serif; color: var(--accent); }
+.chat-header-actions { display: flex; gap: 8px; margin-left: auto; }
+.chat-header-actions button, .conversation-drawer button, .delete-confirmation button { border: 1px solid var(--line); border-radius: 12px; background: var(--bg-surface); color: var(--ink); padding: 8px 12px; font: inherit; font-size: 12px; }
+.chat-header-actions button span { color: var(--muted); margin-left: 6px; }
+.conversation-drawer { flex-shrink: 0; max-height: 230px; overflow-y: auto; border: 1px solid var(--line); border-radius: 16px; padding: 14px; background: var(--bg-surface); }
+.conversation-drawer-heading { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+.conversation-row { display: flex; gap: 6px; margin: 5px 0; }
+.conversation-row > button:first-child { flex: 1; text-align: left; overflow-wrap: anywhere; }
+.conversation-row > button[aria-pressed=true] { background: var(--accent-tint); }
+.conversation-delete { color: #8b465a !important; }
+.delete-confirmation { flex-shrink: 0; border: 1px solid #d9a9b3; background: #fff7f7; color: #56333b; border-radius: 14px; padding: 16px; }
+.delete-confirmation p { font-size: 13px; line-height: 1.5; }
+.delete-confirmation > div { display: flex; gap: 8px; }
+.delete-confirmation .confirm-delete { background: #8b465a; color: white; }
+.chat-view .composer { padding: 14px 18px 10px; border-radius: 24px; box-shadow: 0 6px 24px #5143390a; overflow: visible; }
+.composer-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+.chat-view .composer textarea { min-height: 58px; font-size: 15px; padding: 8px 2px; }
+.chat-view .composer-footer { border-top: 0; padding-top: 6px; min-width: 0; }
+.chat-view .composer-actions > button[aria-label="Send message"] { width: 36px; height: 36px; padding: 0; border-radius: 50%; font-size: 22px; background: var(--ink); color: var(--bg-surface); }
+.chat-view .composer-actions > button[aria-label="Send message"]:disabled { opacity: .35; }
+.model-picker { position: relative; min-width: 0; max-width: calc(100% - 100px); }
+.model-trigger { display: flex; align-items: center; gap: 8px; max-width: 100%; border: 0; border-radius: 20px; padding: 8px 10px; background: transparent; color: var(--muted); font: inherit; font-size: 12px; }
+.model-trigger:hover:not(:disabled) { background: var(--accent-tint); color: var(--ink); }
+.model-trigger-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.model-spark { color: var(--accent); font-size: 19px; }
+.model-popover { position: absolute; bottom: calc(100% + 12px); left: 0; width: min(350px, 72vw); z-index: 30; background: var(--bg-surface); border: 1px solid var(--line); border-radius: 18px; box-shadow: 0 12px 45px #423b4726; padding: 14px; }
+.model-popover-heading { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; font-size: 14px; }
+.model-popover-heading button { border: 0; background: transparent; color: var(--accent); font: inherit; font-size: 12px; padding: 6px; }
+.model-popover input { width: 100%; border: 1px solid var(--line); border-radius: 10px; padding: 10px; background: var(--bg-base); color: var(--ink); font: inherit; font-size: 13px; }
+.model-popover input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.model-results { max-height: min(240px, 35vh); overflow-y: auto; margin: 9px -4px; }
+.model-results button { display: flex; justify-content: space-between; gap: 12px; text-align: left; width: 100%; border: 0; background: transparent; color: var(--ink); padding: 10px 8px; border-radius: 9px; font: inherit; font-size: 13px; overflow-wrap: anywhere; }
+.model-results button:hover:not(:disabled), .model-results button[aria-pressed=true] { background: var(--accent-tint); }
+.model-results p, .model-popover > small { color: var(--muted); font-size: 11px; line-height: 1.5; }
+@media (max-width: 560px) { .chat-heading small { display: none; } .chat-header-actions button { padding: 7px; font-size: 11px; } .chat-view .composer { padding: 10px 12px; } }

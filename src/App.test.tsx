@@ -644,6 +644,7 @@ describe("conversation history and reopening", () => {
     const user = userEvent.setup();
     render(<App />);
 
+    await user.click(screen.getByRole("button", { name: /Conversations/ }));
     const chip = await screen.findByRole("button", { name: "Game Architecture" });
     await user.click(chip);
 

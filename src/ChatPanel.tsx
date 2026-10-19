@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import "./ChatPanel.css";
+import ModelPicker from "./ModelPicker";
 
 export type MessageStatus = "complete" | "cancelled" | "failed";
 
@@ -55,6 +56,21 @@ export default function ChatPanel({ onNavigate }: ChatPanelProps) {
   const [settings, setSettings] = useState<ChatSettings | null>(null);
   const [models, setModels] = useState<string[]>([]);
   const [modelBusy, setModelBusy] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<ConversationSummary | null>(null);
+  const [deleting, setDeleting] = useState(false);
+
+  async function deleteConversation() {
+    if (!deleteTarget || isStreaming || deleting) return;
+    setDeleting(true); setError(null);
+    try {
+      await invoke("delete_conversation", { id: deleteTarget.id });
+      setConversations((items) => items.filter((item) => item.id !== deleteTarget.id));
+      if (activeConversationId === deleteTarget.id) { setActiveConversationId(null); setMessages([]); }
+      setDeleteTarget(null);
+    } catch (reason) { setError(String(reason)); }
+    finally { setDeleting(false); }
+  }
 
   async function loadModels() {
     if (!desktop || isStreaming || modelBusy) return;
@@ -171,7 +187,7 @@ export default function ChatPanel({ onNavigate }: ChatPanelProps) {
 
   async function handleSend(overrideContent?: string) {
     const textToSend = (overrideContent ?? input).trim();
-    if (!textToSend || isStreaming || modelBusy || !settings?.model || !desktop) return;
+    if (!textToSend || isStreaming || deleting || modelBusy || !settings?.model || !desktop) return;
 
     const requestId = crypto.randomUUID();
     activeRequestIdRef.current = requestId;
@@ -315,32 +331,28 @@ export default function ChatPanel({ onNavigate }: ChatPanelProps) {
       aria-labelledby={messages.length === 0 ? "welcome-title" : undefined}
       aria-label={messages.length > 0 ? "Chat conversation" : undefined}
     >
-      <div className="chat-history-bar" aria-label="Conversation management">
-        <button
-          type="button"
-          className="new-chat-btn"
-          onClick={handleNewChat}
-          disabled={!desktop || isStreaming}
-        >
-          + New chat
-        </button>
-        {conversations.length > 0 && (
-          <div className="conversation-chips" role="group" aria-label="Recent conversations">
-            {conversations.map((c) => (
-              <button
-                key={c.id}
-                type="button"
-                className="conversation-chip"
-                aria-pressed={c.id === activeConversationId}
-                onClick={() => void reopenConversation(c.id)}
-                disabled={!desktop || isStreaming}
-              >
-                {c.title || "Untitled conversation"}
-              </button>
-            ))}
-          </div>
-        )}
+      <div className="chat-history-bar">
+        <div className="chat-heading"><span className="chat-heading-mark" aria-hidden="true">?</span><div><strong>Yuki</strong><small>A little space to think together</small></div></div>
+        <div className="chat-header-actions">
+          <button type="button" onClick={() => setHistoryOpen(!historyOpen)} aria-expanded={historyOpen}>Conversations <span>{conversations.length}</span></button>
+          <button type="button" className="new-chat-btn" onClick={handleNewChat} disabled={!desktop || isStreaming || deleting}>+ New chat</button>
+        </div>
       </div>
+      {historyOpen && <section className="conversation-drawer" aria-label="Recent conversations">
+        <div className="conversation-drawer-heading"><strong>Your conversations</strong><button onClick={() => setHistoryOpen(false)} aria-label="Close conversations">Close</button></div>
+        {!conversations.length && <p>No saved conversations yet.</p>}
+        {conversations.map((conversation) => <div className="conversation-row" key={conversation.id}>
+          <button type="button" aria-pressed={conversation.id === activeConversationId} disabled={isStreaming || deleting}
+            onClick={() => { void reopenConversation(conversation.id); setHistoryOpen(false); }}>{conversation.title || "Untitled conversation"}</button>
+          <button type="button" className="conversation-delete" aria-label={`Delete conversation: ${conversation.title || "Untitled conversation"}`}
+            disabled={isStreaming || deleting} onClick={() => setDeleteTarget(conversation)}>Delete</button>
+        </div>)}
+      </section>}
+      {deleteTarget && <section className="delete-confirmation" role="alertdialog" aria-labelledby="delete-title" aria-describedby="delete-detail">
+        <strong id="delete-title">Delete this conversation?</strong>
+        <p id="delete-detail">?{deleteTarget.title || "Untitled conversation"}? and its saved history will be permanently removed. Project files stay untouched.</p>
+        <div><button disabled={deleting} onClick={() => setDeleteTarget(null)}>Keep conversation</button><button className="confirm-delete" disabled={deleting || isStreaming} onClick={() => void deleteConversation()}>{deleting ? "Deleting?" : "Delete permanently"}</button></div>
+      </section>}
 
       {!desktop && (
         <p className="browser-warning" role="status">
@@ -421,19 +433,7 @@ export default function ChatPanel({ onNavigate }: ChatPanelProps) {
       )}
 
       <div className="composer">
-        <div className="chat-model-controls">
-          <label htmlFor="chat-active-model">Chat model</label>
-          <select id="chat-active-model" value={settings?.model ?? ""}
-            disabled={!desktop || isStreaming || modelBusy || !settings}
-            onChange={(event) => void selectModel(event.target.value)}>
-            <option value="" disabled>Select a model</option>
-            {settings?.model && !models.includes(settings.model) && <option value={settings.model}>{settings.model}</option>}
-            {models.map((model) => <option key={model} value={model}>{model}</option>)}
-          </select>
-          <button type="button" disabled={!desktop || isStreaming || modelBusy || !settings}
-            onClick={() => void loadModels()}>{modelBusy ? "Working..." : "Load models"}</button>
-        </div>
-        <label htmlFor="message">Message Yuki</label>
+        <label className="composer-label" htmlFor="message">Message Yuki</label>
         <textarea
           id="message"
           value={input}
@@ -457,15 +457,8 @@ export default function ChatPanel({ onNavigate }: ChatPanelProps) {
           rows={2}
         />
         <div className="composer-footer">
-          <small>
-            {!desktop
-              ? "Browser preview has no native or provider access."
-              : isStreaming
-              ? "Streaming response..."
-              : !settings?.model
-              ? "No model connected. Nothing is sent or saved."
-              : "Messages are sent to your configured 9router model."}
-          </small>
+          <ModelPicker model={settings?.model ?? ""} models={models} busy={modelBusy}
+            disabled={!desktop || isStreaming || deleting || !settings} onLoad={() => void loadModels()} onSelect={selectModel} />
           <div className="composer-actions">
             {isStreaming && (
               <button
@@ -481,9 +474,9 @@ export default function ChatPanel({ onNavigate }: ChatPanelProps) {
               type="button"
               onClick={() => void handleSend()}
               aria-label="Send message"
-              disabled={!desktop || isStreaming || modelBusy || !input.trim() || !settings?.model}
+              disabled={!desktop || deleting || isStreaming || modelBusy || !input.trim() || !settings?.model}
             >
-              Send &gt;
+              <span aria-hidden="true">?</span>
             </button>
           </div>
         </div>

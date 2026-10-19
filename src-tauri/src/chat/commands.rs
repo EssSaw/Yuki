@@ -9,8 +9,8 @@ use super::client::{
 };
 use super::credentials::{SERVICE_NAME, USER_NAME};
 use super::history::{
-    list_conversations_from_disk, load_conversation_from_disk, save_conversation_atomic,
-    validate_conversation_id,
+    delete_conversation_from_disk, list_conversations_from_disk, load_conversation_from_disk,
+    save_conversation_atomic, validate_conversation_id,
 };
 use super::models::{
     ChatConfig, ChatMessage, ChatSettingsDto, ChatStreamPayload, ConversationDetail,
@@ -232,6 +232,47 @@ pub async fn load_conversation(app: AppHandle, id: String) -> Result<Conversatio
     tauri::async_runtime::spawn_blocking(move || load_conversation_from_disk(&data_root, &id))
         .await
         .map_err(|e| format!("Failed to load conversation: {e}"))?
+}
+
+#[tauri::command]
+pub async fn delete_conversation(
+    app: AppHandle,
+    state: State<'_, ChatState>,
+    id: String,
+) -> Result<(), String> {
+    let valid_uuid = validate_conversation_id(&id)?;
+    let valid_uuid_str = valid_uuid.to_string();
+
+    let config_dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
+    let workspace_settings = crate::workspace::settings::load_settings(&config_dir)?;
+
+    let data_root_str = workspace_settings.data_root.ok_or(
+        "Data root is not configured or unavailable. Please choose a data root in workspace settings first."
+            .to_string(),
+    )?;
+
+    let data_root = PathBuf::from(data_root_str);
+    if !data_root.exists() {
+        return Err(format!(
+            "Configured data root directory '{}' is unavailable.",
+            data_root.display()
+        ));
+    }
+
+    let chat_state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let active_guard = chat_state.inner.active.lock().map_err(|e| e.to_string())?;
+        if let Some(ref active) = *active_guard {
+            return Err(format!(
+                "Cannot delete conversation while a chat request ('{}') is active. Please wait or cancel it before deleting.",
+                active.request_id
+            ));
+        }
+
+        delete_conversation_from_disk(&data_root, &valid_uuid_str)
+    })
+    .await
+    .map_err(|e| format!("Delete conversation task failed: {e}"))?
 }
 
 #[tauri::command]
