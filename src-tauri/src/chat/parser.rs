@@ -3,6 +3,12 @@ use serde::Deserialize;
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum ParsedEvent {
     Delta(String),
+    ToolCallDelta {
+        index: usize,
+        id: Option<String>,
+        name: Option<String>,
+        arguments_delta: Option<String>,
+    },
     Done,
     Error(String),
 }
@@ -10,13 +16,19 @@ pub enum ParsedEvent {
 #[derive(Default)]
 pub struct SseParser {
     buffer: String,
+    last_finish_reason: Option<String>,
 }
 
 impl SseParser {
     pub fn new() -> Self {
         Self {
             buffer: String::new(),
+            last_finish_reason: None,
         }
+    }
+
+    pub fn last_finish_reason(&self) -> Option<&str> {
+        self.last_finish_reason.as_deref()
     }
 
     /// Feeds a chunk of text into the parser and returns all complete events extracted.
@@ -45,7 +57,7 @@ impl SseParser {
                     continue;
                 }
 
-                parse_chunk_json(payload, &mut events);
+                parse_chunk_json(payload, &mut events, &mut self.last_finish_reason);
             } else if trimmed.starts_with('{') {
                 // Raw JSON error from provider without data: prefix
                 if let Some(err) = parse_raw_json_error(trimmed) {
@@ -71,7 +83,7 @@ impl SseParser {
             if payload == "[DONE]" {
                 events.push(ParsedEvent::Done);
             } else {
-                parse_chunk_json(payload, &mut events);
+                parse_chunk_json(payload, &mut events, &mut self.last_finish_reason);
             }
         } else if trimmed.starts_with('{') {
             if let Some(err) = parse_raw_json_error(trimmed) {
@@ -100,6 +112,24 @@ struct OpenAiChoice {
 #[derive(Default, Deserialize)]
 struct OpenAiDelta {
     content: Option<String>,
+    #[serde(default)]
+    tool_calls: Vec<OpenAiToolCallChunk>,
+}
+
+#[derive(Default, Deserialize)]
+struct OpenAiToolCallChunk {
+    index: Option<usize>,
+    id: Option<String>,
+    #[serde(rename = "type")]
+    #[allow(dead_code)]
+    tool_type: Option<String>,
+    function: Option<OpenAiFunctionChunk>,
+}
+
+#[derive(Default, Deserialize)]
+struct OpenAiFunctionChunk {
+    name: Option<String>,
+    arguments: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -136,7 +166,11 @@ pub fn is_valid_finish_reason(reason: &str) -> bool {
     )
 }
 
-fn parse_chunk_json(payload: &str, events: &mut Vec<ParsedEvent>) {
+fn parse_chunk_json(
+    payload: &str,
+    events: &mut Vec<ParsedEvent>,
+    last_finish_reason: &mut Option<String>,
+) {
     match serde_json::from_str::<OpenAiChunk>(payload) {
         Ok(chunk) => {
             if let Some(err) = chunk.error {
@@ -161,8 +195,22 @@ fn parse_chunk_json(payload: &str, events: &mut Vec<ParsedEvent>) {
                         events.push(ParsedEvent::Delta(content));
                     }
                 }
+                for tc in choice.delta.tool_calls {
+                    let index = tc.index.unwrap_or(0);
+                    let name = tc.function.as_ref().and_then(|f| f.name.clone());
+                    let arguments_delta = tc.function.as_ref().and_then(|f| f.arguments.clone());
+                    if tc.id.is_some() || name.is_some() || arguments_delta.is_some() {
+                        events.push(ParsedEvent::ToolCallDelta {
+                            index,
+                            id: tc.id,
+                            name,
+                            arguments_delta,
+                        });
+                    }
+                }
                 if let Some(ref finish) = choice.finish_reason {
                     let trimmed = finish.trim();
+                    *last_finish_reason = Some(trimmed.to_string());
                     if trimmed.eq_ignore_ascii_case("error") {
                         events.push(ParsedEvent::Error(
                             "Provider stopped generation with error".to_string(),

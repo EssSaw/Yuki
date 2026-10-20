@@ -1,5 +1,28 @@
 # Current handoff
 
+## Native read-only tool-calling loop (2026-10-20)
+
+Implemented the approved native-only read-only tool-calling loop integrated with
+streaming chat, cancellation, and original conversation history in `src-tauri/src/chat/`
+and `src-tauri/src/workspace/`; contracts and bounds documented in [chat architecture](architecture/chat.md).
+Exposes three strictly bounded read-only tools: `list_shareable_projects` (approved roots
+with active provider-sharing grants only), `list_project_directory` (sanitized directory
+listing within granted roots, secrets excluded), and `read_file_chunk` (bounded UTF-8 text
+chunk reads within granted roots). Enforces pre-send reauthorization: revocation of a
+project sharing grant while a tool is in flight immediately purges pending content before
+crossing the network boundary. Enforces hard budgets (5 rounds, 8 calls/round, 16 total calls,
+64 KiB/result, 256 KiB cumulative, 64 KiB arguments). No writes, shell, search/index,
+uploads outside grants, provider fallback or automatic inference. Disk conversation history
+strictly retains only user and assistant text messages; transient tool outputs and raw file
+chunks are never persisted. Compatibility with plain streaming models without tools is preserved.
+
+Validation: 75 native tests passed in `cargo test --manifest-path src-tauri\Cargo.toml`
+(including mock HTTP SSE fixtures covering split arguments, tool success, ungranted/sensitive/traversal
+denials, pre-send revocation, malformed/unknown tools, round budgets, cancellation, follow-up
+assistant stream, and plain-chat regression). `cargo fmt --check` and `cargo clippy` passed cleanly.
+No frontend UI changes (Hard UI model required later), no commits/pushes, no real provider requests.
+Next: UI indicator/badges for tool activity using Hard UI per AGENTS.md.
+
 ## Local preview / sharing UI integration (2026-10-20)
 
 Completed the approved frontend-only slice in `src/WorkspacePanel.tsx`,
@@ -244,3 +267,17 @@ An initial newline-sensitive assertion failed on CRLF and was corrected before
 rerunning. These are source/DOM checks, not rendered layout acceptance; no browser
 or native visual validation/rebuild was performed. Preserved existing dirty work,
 attachments and `target/`; no dependencies, commit or push. Bounded fix complete.
+
+Parent integration review: native tool results retained in a turn are now reauthorized
+before every subsequent provider request, not only immediately after execution. Request
+send waits are cancellation-aware. Missing tool IDs are normalized once for matching
+assistant/tool messages. AI reads default/clamp to 8 KiB so JSON-escaped content fits the
+64 KiB serialized-result budget; local preview remains 64 KiB. Added escaped-content
+budget regression; all 76 native tests pass. No live provider or manual acceptance yet.
+Final integration validation: 76 native tests, 46 frontend tests, Rust formatting,
+frontend production build and native Windows release build (--no-bundle) passed.
+Executable: src-tauri/target/release/yuki.exe. Ready for focused commit/publication.
+Actual configured-model tool support remains unverified. Manual acceptance must use
+an explicitly share-enabled temporary project containing only dummy text; verify reading,
+disabled-sharing denial, cancellation and plain chat. No private files/live provider
+requests were used during automated validation.

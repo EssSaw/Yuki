@@ -49,6 +49,42 @@ The user's exact provider stream was not captured. Chat layout now uses a constr
 scrolling transcript, wider assistant reading measure and compact composer/mood controls;
 manual desktop visual acceptance is still required.
 
+## Native read-only tool-calling loop
+
+The native chat streaming pipeline (`execute_chat_stream`) integrates an OpenAI-compatible
+read-only tool-calling loop governed by strict containment, budgeting, and provider-sharing rules:
+
+- **Available tools**:
+  - `list_shareable_projects`: returns approved project roots that currently have explicit
+    provider-sharing grants enabled.
+  - `list_project_directory`: returns files and subdirectories within a granted root.
+    Rejects unapproved roots, missing grants, traversal attempts (`..`), and restricted
+    files/folders (.env, credentials, SSH keys, dot-directories, system folders).
+  - `read_file_chunk`: reads bounded UTF-8 text (up to 64 KiB) from an authorized file
+    inside a granted project root. Clamped to UTF-8 scalar boundaries.
+- **Security & transmission boundary**:
+  - No writes, shell execution, search/indexing, ungranted uploads, or background inference.
+  - Reauthorization before send: immediately before any tool result payload crosses the
+    network boundary to the provider, `reauthorize_tool_result` rechecks active root grants.
+    If a user revoked sharing while execution was in flight, the pending content is purged
+    and replaced with an authorization error.
+  - Untrusted data framing: tool outputs and file text are sent with `role: "tool"` and
+    treated strictly as data, never as prompt instruction overrides.
+- **Budgeting & bounds**:
+  - Maximum 5 tool rounds per user turn (`MAX_TOOL_ROUNDS`).
+  - Maximum 8 tool calls per round (`MAX_TOOLS_PER_ROUND`).
+  - Maximum 16 cumulative tool calls per user turn (`MAX_TOTAL_TOOL_CALLS`).
+  - Maximum 64 KiB per tool result (`MAX_TOOL_RESULT_BYTES`).
+  - Maximum 256 KiB cumulative tool output per user turn (`MAX_CUMULATIVE_TOOL_OUTPUT_BYTES`).
+  - Maximum 64 KiB tool call arguments delta (`MAX_TOOL_ARGUMENTS_BYTES`).
+- **History nonpersistence**:
+  - Stored conversation history on disk retains only user and terminal assistant text messages.
+    Transient tool calls, arguments, and file chunks are never persisted to conversation files,
+    avoiding an accidental durable cache of sensitive project contents.
+- **Plain chat compatibility**:
+  - Standard chat models without tool-call deltas or completing with standard finish reasons
+    (`stop`, `length`, `[DONE]`) stream and terminate normally without regression.
+
 ## Current limitations
 
 History uses full JSON records with backup/rollback replacement, not transactional
@@ -56,8 +92,10 @@ multi-process storage. Prompt context is character-bounded, not an exact token c
 Failed or cancelled partial responses retain their statuses. Retrying explicitly sends
 a new turn; it is not an idempotent replay. Settings/history writes have not undergone
 forced-crash acceptance testing. Cancellation requests wait for terminal stream events;
-quitting the process abruptly may lose an in-flight partial response. There is no
-long-term memory extraction, file attachment, tool calling or background inference.
+quitting the process abruptly may lose an in-flight partial response. Tool calling is
+restricted to native read-only inspection of granted projects; frontend visualization
+of tool calls and status badges is pending future UI work (Hard UI required).
+There is no long-term memory extraction, write capability, or shell execution.
 
 ## Manual setup
 
@@ -75,3 +113,10 @@ the conversation visible. Verified: 52 native tests, 26 frontend tests, frontend
 Windows release builds. Desktop visual/picker acceptance remains pending.
 Test stop-generation and reopen the conversation after restart. Do not
 paste credentials into chat. A locally routed endpoint may still use remote inference.
+
+AI file chunks are capped at 8 KiB per tool read (local preview supports 64 KiB),
+leaving space for JSON escaping under the serialized output budget. This is not a
+file-size limit. Retained tool results are reauthorized on each subsequent request;
+request-send waits also participate in cancellation. File contents in assistant-generated
+answers can still appear in ordinary conversation history; excluding raw tool messages
+from history does not imply that generated answers contain no project information.

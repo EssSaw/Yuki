@@ -563,3 +563,63 @@ pub fn validate_read_path(config_dir: &Path, path_str: &str) -> Result<PathBuf, 
 
     Ok(canonical)
 }
+
+/// Lists approved project roots that currently have an active provider-sharing grant.
+/// Only project roots with explicit sharing enabled are returned.
+pub fn get_shareable_project_roots_impl(config_dir: &Path) -> Result<Vec<String>, String> {
+    let settings = load_settings(config_dir)?;
+    let mut shareable = Vec::new();
+
+    for root in &settings.project_roots {
+        if let Ok(canon_root) = dunce::canonicalize(root) {
+            let is_granted = settings.provider_sharing_grants.iter().any(|g| {
+                g == root
+                    || dunce::canonicalize(g)
+                        .map(|cg| cg == canon_root)
+                        .unwrap_or(false)
+            });
+            if is_granted {
+                shareable.push(root.clone());
+            }
+        }
+    }
+
+    Ok(shareable)
+}
+
+/// Lists immediate entries in an approved project directory, requiring an active provider-sharing grant.
+/// Rejects ungranted project roots to prevent leaking directory structure or file metadata to providers.
+pub fn list_provider_project_directory_impl(
+    config_dir: &Path,
+    root: &str,
+    relative_path: &str,
+) -> Result<Vec<ProjectEntry>, String> {
+    let settings = load_settings(config_dir)?;
+
+    let canonical_root = dunce::canonicalize(root)
+        .map_err(|e| format!("Failed to canonicalize root directory: {e}"))?;
+
+    let is_approved = settings.project_roots.iter().any(|approved| {
+        approved == root
+            || dunce::canonicalize(approved)
+                .map(|c| c == canonical_root)
+                .unwrap_or(false)
+    });
+
+    if !is_approved {
+        return Err("Root directory is not an approved project folder".to_string());
+    }
+
+    let is_granted = settings.provider_sharing_grants.iter().any(|g| {
+        g == root
+            || dunce::canonicalize(g)
+                .map(|cg| cg == canonical_root)
+                .unwrap_or(false)
+    });
+
+    if !is_granted {
+        return Err("Provider sharing is not enabled for this project folder".to_string());
+    }
+
+    list_project_directory_impl(config_dir, root, relative_path)
+}

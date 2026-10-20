@@ -1,8 +1,9 @@
 use std::path::{Path, PathBuf};
 
 use super::explorer::{
-    is_blocked_name, is_drive_root, is_system_directory, is_user_profile_root,
-    list_project_directory_impl, validate_project_root,
+    get_shareable_project_roots_impl, is_blocked_name, is_drive_root, is_system_directory,
+    is_user_profile_root, list_project_directory_impl, list_provider_project_directory_impl,
+    validate_project_root,
 };
 use super::models::WorkspaceSettings;
 use super::reader::{MAX_CHUNK_SIZE, authorize_provider_file, read_local_file_chunk_impl};
@@ -917,5 +918,116 @@ fn test_authorize_provider_file_grants_and_containment() {
     assert!(
         read_res.is_ok(),
         "Broad ordinary reads do not require project-root approval"
+    );
+}
+
+#[test]
+fn test_get_shareable_project_roots_impl() {
+    let env = TestEnv::new("shareable_roots");
+    let cfg = env.config_dir();
+    let dir1 = env.new_dir("proj1");
+    let dir2 = env.new_dir("proj2");
+
+    // Initially no project roots
+    let roots = get_shareable_project_roots_impl(&cfg).unwrap();
+    assert!(roots.is_empty());
+
+    // Add proj1 and proj2, neither has sharing grant
+    add_project_root_path(&cfg, &dir1).unwrap();
+    add_project_root_path(&cfg, &dir2).unwrap();
+
+    let roots = get_shareable_project_roots_impl(&cfg).unwrap();
+    assert!(
+        roots.is_empty(),
+        "Roots without grants must not be shareable"
+    );
+
+    // Enable sharing on proj1
+    let canon1 = dunce::canonicalize(&dir1)
+        .unwrap()
+        .to_string_lossy()
+        .to_string();
+    toggle_project_provider_sharing_impl(&cfg, &canon1, Some(true)).unwrap();
+
+    let roots = get_shareable_project_roots_impl(&cfg).unwrap();
+    assert_eq!(roots.len(), 1);
+    assert_eq!(roots[0], canon1);
+
+    // Enable sharing on proj2
+    let canon2 = dunce::canonicalize(&dir2)
+        .unwrap()
+        .to_string_lossy()
+        .to_string();
+    toggle_project_provider_sharing_impl(&cfg, &canon2, Some(true)).unwrap();
+
+    let roots = get_shareable_project_roots_impl(&cfg).unwrap();
+    assert_eq!(roots.len(), 2);
+
+    // Revoke proj1
+    toggle_project_provider_sharing_impl(&cfg, &canon1, Some(false)).unwrap();
+    let roots = get_shareable_project_roots_impl(&cfg).unwrap();
+    assert_eq!(roots.len(), 1);
+    assert_eq!(roots[0], canon2);
+}
+
+#[test]
+fn test_list_provider_project_directory_impl() {
+    let env = TestEnv::new("provider_list_dir");
+    let cfg = env.config_dir();
+    let proj = env.new_dir("proj");
+    let unapproved = env.new_dir("unapproved");
+
+    std::fs::write(proj.join("main.rs"), b"fn main() {}").unwrap();
+    std::fs::write(proj.join(".env"), b"SECRET=123").unwrap();
+    std::fs::create_dir_all(proj.join("src")).unwrap();
+    std::fs::write(proj.join("src").join("lib.rs"), b"pub fn f() {}").unwrap();
+
+    let canon_proj = dunce::canonicalize(&proj)
+        .unwrap()
+        .to_string_lossy()
+        .to_string();
+
+    // 1. Unapproved root rejected
+    let err_unapproved =
+        list_provider_project_directory_impl(&cfg, unapproved.to_str().unwrap(), "").unwrap_err();
+    assert_eq!(
+        err_unapproved,
+        "Root directory is not an approved project folder"
+    );
+
+    // 2. Approved root but sharing NOT enabled
+    add_project_root_path(&cfg, &proj).unwrap();
+    let err_ungranted = list_provider_project_directory_impl(&cfg, &canon_proj, "").unwrap_err();
+    assert_eq!(
+        err_ungranted,
+        "Provider sharing is not enabled for this project folder"
+    );
+
+    // 3. Enable sharing -> directory listing succeeds
+    toggle_project_provider_sharing_impl(&cfg, &canon_proj, Some(true)).unwrap();
+    let entries = list_provider_project_directory_impl(&cfg, &canon_proj, "").unwrap();
+    let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
+    assert!(names.contains(&"main.rs"));
+    assert!(names.contains(&"src"));
+    assert!(
+        !names.contains(&".env"),
+        "Secret files must be excluded from provider listing"
+    );
+
+    // Subdirectory listing
+    let sub_entries = list_provider_project_directory_impl(&cfg, &canon_proj, "src").unwrap();
+    assert_eq!(sub_entries.len(), 1);
+    assert_eq!(sub_entries[0].name, "lib.rs");
+
+    // Traversal rejection
+    let err_traversal = list_provider_project_directory_impl(&cfg, &canon_proj, "../").unwrap_err();
+    assert_eq!(err_traversal, "Path traversal (..) is not allowed");
+
+    // 4. Revocation immediately disables listing
+    toggle_project_provider_sharing_impl(&cfg, &canon_proj, Some(false)).unwrap();
+    let err_revoked = list_provider_project_directory_impl(&cfg, &canon_proj, "").unwrap_err();
+    assert_eq!(
+        err_revoked,
+        "Provider sharing is not enabled for this project folder"
     );
 }

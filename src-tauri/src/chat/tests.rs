@@ -15,6 +15,12 @@ use super::history::{
 use super::models::{ChatConfig, ChatMessage, ConversationDetail, MessageRole, MessageStatus};
 use super::parser::{ParsedEvent, SseParser};
 use super::state::ChatState;
+use super::tools::{
+    MAX_CUMULATIVE_TOOL_OUTPUT_BYTES, MAX_TOOL_ARGUMENTS_BYTES, MAX_TOOL_RESULT_BYTES,
+    MAX_TOOL_ROUNDS, MAX_TOOLS_PER_ROUND, MAX_TOTAL_TOOL_CALLS, ToolCallAccumulator, execute_tool,
+    get_chat_tools, reauthorize_tool_result,
+};
+use crate::workspace::settings::{add_project_root_path, toggle_project_provider_sharing_impl};
 
 /// Test helper providing an isolated sandbox in target/test_temp.
 /// Strictly avoids /tmp, /var/tmp, or user directories.
@@ -50,6 +56,12 @@ impl TestEnv {
 
     fn data_root(&self) -> PathBuf {
         let dir = self.root.join("data_root");
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn new_dir(&self, name: &str) -> PathBuf {
+        let dir = self.root.join(name);
         std::fs::create_dir_all(&dir).unwrap();
         dir
     }
@@ -605,6 +617,47 @@ impl super::commands::ChatEventSink for TestEventSink {
     }
 }
 
+async fn read_http_request(socket: &mut tokio::net::TcpStream) -> String {
+    use tokio::io::AsyncReadExt;
+    let mut buf = Vec::new();
+    let mut temp = [0u8; 1024];
+    let mut content_length = 0;
+    let mut headers_done = false;
+
+    while let Ok(n) = socket.read(&mut temp).await {
+        if n == 0 {
+            break;
+        }
+        buf.extend_from_slice(&temp[..n]);
+        if !headers_done {
+            if let Some(pos) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+                headers_done = true;
+                let headers_str = String::from_utf8_lossy(&buf[..pos]);
+                for line in headers_str.lines() {
+                    let lower = line.to_ascii_lowercase();
+                    if lower.starts_with("content-length:") {
+                        let parts: Vec<&str> = line.splitn(2, ':').collect();
+                        if parts.len() == 2 {
+                            content_length = parts[1].trim().parse::<usize>().unwrap_or(0);
+                        }
+                    }
+                }
+                let body_read = buf.len() - (pos + 4);
+                if body_read >= content_length {
+                    break;
+                }
+            }
+        } else {
+            let pos = buf.windows(4).position(|w| w == b"\r\n\r\n").unwrap();
+            let body_read = buf.len() - (pos + 4);
+            if body_read >= content_length {
+                break;
+            }
+        }
+    }
+    String::from_utf8_lossy(&buf).to_string()
+}
+
 #[tokio::test]
 async fn test_execute_chat_stream_full_success() {
     let env = TestEnv::new("stream_success");
@@ -631,8 +684,7 @@ async fn test_execute_chat_stream_full_success() {
 
     tokio::spawn(async move {
         if let Ok((mut socket, _)) = listener.accept().await {
-            let mut buf = [0u8; 1024];
-            let _ = socket.read(&mut buf).await;
+            let _ = read_http_request(&mut socket).await;
 
             let chunk1 = "data: {\"choices\":[{\"delta\":{\"content\":\"Paris\"}}]}\n\n";
             let chunk2 = "data: {\"choices\":[{\"delta\":{\"content\":\" is the capital.\"}}]}\n\n";
@@ -666,6 +718,7 @@ async fn test_execute_chat_stream_full_success() {
         sink.clone(),
         state.clone(),
         data_root.clone(),
+        env.config_dir(),
         conv_id.clone(),
         req_id.to_string(),
         base_url,
@@ -731,8 +784,7 @@ async fn test_execute_chat_stream_cancellation_mid_stream() {
 
     tokio::spawn(async move {
         if let Ok((mut socket, _)) = listener.accept().await {
-            let mut buf = [0u8; 1024];
-            let _ = socket.read(&mut buf).await;
+            let _ = read_http_request(&mut socket).await;
 
             let header = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n";
             let _ = socket.write_all(header.as_bytes()).await;
@@ -761,6 +813,7 @@ async fn test_execute_chat_stream_cancellation_mid_stream() {
     let sink_clone = sink.clone();
     let state_clone = state.clone();
     let data_root_clone = data_root.clone();
+    let config_dir_clone = env.config_dir();
     let conv_id_clone = conv_id.clone();
     let initial_messages = initial_conv.messages.clone();
 
@@ -769,6 +822,7 @@ async fn test_execute_chat_stream_cancellation_mid_stream() {
             sink_clone,
             state_clone,
             data_root_clone,
+            config_dir_clone,
             conv_id_clone,
             req_id.to_string(),
             base_url,
@@ -842,8 +896,7 @@ async fn test_execute_chat_stream_server_error_sanitization() {
 
     tokio::spawn(async move {
         if let Ok((mut socket, _)) = listener.accept().await {
-            let mut buf = [0u8; 1024];
-            let _ = socket.read(&mut buf).await;
+            let _ = read_http_request(&mut socket).await;
 
             let body = "{\"error\":{\"message\":\"Internal failure with secret sql query\"}}";
             let resp = format!(
@@ -870,6 +923,7 @@ async fn test_execute_chat_stream_server_error_sanitization() {
         sink.clone(),
         state.clone(),
         data_root.clone(),
+        env.config_dir(),
         conv_id.clone(),
         req_id.to_string(),
         base_url,
@@ -928,8 +982,7 @@ async fn test_execute_chat_stream_finish_reason_without_done_succeeds() {
 
     tokio::spawn(async move {
         if let Ok((mut socket, _)) = listener.accept().await {
-            let mut buf = [0u8; 1024];
-            let _ = socket.read(&mut buf).await;
+            let _ = read_http_request(&mut socket).await;
 
             let chunk1 = "data: {\"choices\":[{\"delta\":{\"content\":\"Paris\"}}]}\n\n";
             let chunk2 = "data: {\"choices\":[{\"delta\":{\"content\":\" is the capital.\"},\"finish_reason\":\"stop\"}]}\n\n";
@@ -962,6 +1015,7 @@ async fn test_execute_chat_stream_finish_reason_without_done_succeeds() {
         sink.clone(),
         state.clone(),
         data_root.clone(),
+        env.config_dir(),
         conv_id.clone(),
         req_id.to_string(),
         base_url,
@@ -1023,8 +1077,7 @@ async fn test_execute_chat_stream_premature_eof_fails() {
 
     tokio::spawn(async move {
         if let Ok((mut socket, _)) = listener.accept().await {
-            let mut buf = [0u8; 1024];
-            let _ = socket.read(&mut buf).await;
+            let _ = read_http_request(&mut socket).await;
 
             let chunk1 =
                 "data: {\"choices\":[{\"delta\":{\"content\":\"Incomplete thought...\"}}]}\n\n";
@@ -1054,6 +1107,7 @@ async fn test_execute_chat_stream_premature_eof_fails() {
         sink.clone(),
         state.clone(),
         data_root.clone(),
+        env.config_dir(),
         conv_id.clone(),
         req_id.to_string(),
         base_url,
@@ -1112,8 +1166,7 @@ async fn test_execute_chat_stream_finish_reason_with_done_succeeds() {
 
     tokio::spawn(async move {
         if let Ok((mut socket, _)) = listener.accept().await {
-            let mut buf = [0u8; 1024];
-            let _ = socket.read(&mut buf).await;
+            let _ = read_http_request(&mut socket).await;
 
             let chunk1 = "data: {\"choices\":[{\"delta\":{\"content\":\"Hello world\"}}]}\n\n";
             let chunk2 = "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n";
@@ -1146,6 +1199,7 @@ async fn test_execute_chat_stream_finish_reason_with_done_succeeds() {
         sink.clone(),
         state.clone(),
         data_root.clone(),
+        env.config_dir(),
         conv_id.clone(),
         req_id.to_string(),
         base_url,
@@ -1194,8 +1248,7 @@ async fn test_execute_chat_stream_explicit_error_in_stream_fails() {
 
     tokio::spawn(async move {
         if let Ok((mut socket, _)) = listener.accept().await {
-            let mut buf = [0u8; 1024];
-            let _ = socket.read(&mut buf).await;
+            let _ = read_http_request(&mut socket).await;
 
             let chunk1 = "data: {\"choices\":[{\"delta\":{\"content\":\"Partial answer\"}}]}\n\n";
             let chunk2 = "data: {\"error\":{\"message\":\"Upstream backend overloaded\"}}\n\n";
@@ -1227,6 +1280,7 @@ async fn test_execute_chat_stream_explicit_error_in_stream_fails() {
         sink.clone(),
         state.clone(),
         data_root.clone(),
+        env.config_dir(),
         conv_id.clone(),
         req_id.to_string(),
         base_url,
@@ -1734,4 +1788,815 @@ fn test_delete_conversation_reports_partial_filesystem_errors() {
 
     #[cfg(windows)]
     drop(_locked_file);
+}
+
+// ---------------------------------------------------------------------------
+// 10. Native Tool Calling Integration & Unit Tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_tool_schema_and_constants() {
+    let tools = get_chat_tools();
+    assert_eq!(tools.len(), 3);
+    let names: Vec<&str> = tools.iter().map(|t| t.function.name.as_str()).collect();
+    assert!(names.contains(&"list_shareable_projects"));
+    assert!(names.contains(&"list_project_directory"));
+    assert!(names.contains(&"read_file_chunk"));
+
+    for t in &tools {
+        assert_eq!(t.tool_type, "function");
+        assert!(!t.function.description.is_empty());
+        assert!(t.function.parameters.is_object());
+    }
+
+    assert_eq!(MAX_TOOL_ROUNDS, 5);
+    assert_eq!(MAX_TOOLS_PER_ROUND, 8);
+    assert_eq!(MAX_TOTAL_TOOL_CALLS, 16);
+    assert_eq!(MAX_TOOL_RESULT_BYTES, 64 * 1024);
+    assert_eq!(MAX_CUMULATIVE_TOOL_OUTPUT_BYTES, 256 * 1024);
+    assert_eq!(MAX_TOOL_ARGUMENTS_BYTES, 64 * 1024);
+}
+
+#[test]
+fn test_tool_accumulator_split_arguments_and_bounds() {
+    let mut acc = ToolCallAccumulator::new();
+
+    // Chunk 1: index 0, starts function call
+    acc.process_delta(
+        0,
+        Some("call_1".to_string()),
+        Some("read_file_chunk".to_string()),
+        Some("{\"path\":".to_string()),
+    )
+    .unwrap();
+
+    // Chunk 2: index 0, continuation of arguments
+    acc.process_delta(
+        0,
+        None,
+        None,
+        Some("\"C:\\\\test\\\\file.txt\"}".to_string()),
+    )
+    .unwrap();
+
+    let calls = acc.into_calls();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].id, "call_1");
+    assert_eq!(calls[0].name, "read_file_chunk");
+    assert_eq!(calls[0].arguments, "{\"path\":\"C:\\\\test\\\\file.txt\"}");
+
+    // Test argument size limit
+    let mut acc_big = ToolCallAccumulator::new();
+    acc_big
+        .process_delta(
+            0,
+            Some("call_big".to_string()),
+            Some("test".to_string()),
+            Some("a".repeat(MAX_TOOL_ARGUMENTS_BYTES + 10)),
+        )
+        .expect_err("Must reject oversized arguments");
+
+    // Test max tools per round limit
+    let mut acc_many = ToolCallAccumulator::new();
+    for i in 0..MAX_TOOLS_PER_ROUND {
+        acc_many
+            .process_delta(
+                i,
+                Some(format!("call_{i}")),
+                Some("test".to_string()),
+                Some("{}".to_string()),
+            )
+            .unwrap();
+    }
+    // Exceeding limit
+    acc_many
+        .process_delta(
+            MAX_TOOLS_PER_ROUND,
+            Some("overflow".to_string()),
+            Some("test".to_string()),
+            Some("{}".to_string()),
+        )
+        .expect_err("Must reject more than MAX_TOOLS_PER_ROUND calls");
+}
+
+#[test]
+fn test_execute_tool_unit_behavior() {
+    let env = TestEnv::new("tool_exec_unit");
+    let cfg = env.config_dir();
+    let proj = env.new_dir("UnitProject");
+    let file = proj.join("test.txt");
+    std::fs::write(&file, b"Hello tool world").unwrap();
+    let canon_proj = dunce::canonicalize(&proj)
+        .unwrap()
+        .to_string_lossy()
+        .to_string();
+    let canon_file = dunce::canonicalize(&file)
+        .unwrap()
+        .to_string_lossy()
+        .to_string();
+
+    // 1. Unknown tool
+    let res = execute_tool(&cfg, "shell_exec", "{}");
+    assert!(res.contains("Unknown tool 'shell_exec'."));
+
+    // 2. Malformed arguments JSON
+    let res = execute_tool(&cfg, "read_file_chunk", "{invalid json}");
+    assert!(res.contains("Invalid arguments"));
+
+    // 3. list_shareable_projects: initially empty
+    let res = execute_tool(&cfg, "list_shareable_projects", "{}");
+    assert_eq!(res, "{\"projects\":[]}");
+
+    // Enable sharing
+    add_project_root_path(&cfg, &proj).unwrap();
+    toggle_project_provider_sharing_impl(&cfg, &canon_proj, Some(true)).unwrap();
+
+    let res = execute_tool(&cfg, "list_shareable_projects", "{}");
+    assert!(res.contains("UnitProject"));
+
+    // 4. list_project_directory
+    let list_args = serde_json::to_string(&serde_json::json!({
+        "project_root": canon_proj,
+    }))
+    .unwrap();
+    let res = execute_tool(&cfg, "list_project_directory", &list_args);
+    assert!(res.contains("test.txt"));
+
+    // 5. read_file_chunk on granted file
+    let read_args = serde_json::to_string(&serde_json::json!({
+        "path": canon_file,
+    }))
+    .unwrap();
+    let res = execute_tool(&cfg, "read_file_chunk", &read_args);
+    assert!(res.contains("Hello tool world"));
+
+    // 6. read_file_chunk on sensitive file
+    let env_file = proj.join(".env");
+    std::fs::write(&env_file, b"KEY=secret").unwrap();
+    let canon_env = dunce::canonicalize(&env_file)
+        .unwrap()
+        .to_string_lossy()
+        .to_string();
+    let read_env_args = serde_json::to_string(&serde_json::json!({
+        "path": canon_env,
+    }))
+    .unwrap();
+    let res = execute_tool(&cfg, "read_file_chunk", &read_env_args);
+    assert!(res.contains("Access to restricted folder or file is blocked"));
+
+    // 7. read_file_chunk on ungranted outside file
+    let outside = env.new_dir("outside");
+    let out_file = outside.join("out.txt");
+    std::fs::write(&out_file, b"outside").unwrap();
+    let canon_out = dunce::canonicalize(&out_file)
+        .unwrap()
+        .to_string_lossy()
+        .to_string();
+    let read_out_args = serde_json::to_string(&serde_json::json!({
+        "path": canon_out,
+    }))
+    .unwrap();
+    let res = execute_tool(&cfg, "read_file_chunk", &read_out_args);
+    assert!(res.contains("File is outside approved project folders"));
+}
+
+#[test]
+fn test_reauthorize_tool_result_unit_behavior() {
+    let env = TestEnv::new("tool_reauth_unit");
+    let cfg = env.config_dir();
+    let proj = env.new_dir("ReauthProject");
+    let file = proj.join("code.rs");
+    std::fs::write(&file, b"fn code() {}").unwrap();
+    let canon_proj = dunce::canonicalize(&proj)
+        .unwrap()
+        .to_string_lossy()
+        .to_string();
+    let canon_file = dunce::canonicalize(&file)
+        .unwrap()
+        .to_string_lossy()
+        .to_string();
+
+    add_project_root_path(&cfg, &proj).unwrap();
+    toggle_project_provider_sharing_impl(&cfg, &canon_proj, Some(true)).unwrap();
+
+    let args = serde_json::to_string(&serde_json::json!({
+        "path": canon_file,
+    }))
+    .unwrap();
+
+    let mut content = "{\"text\":\"fn code() {}\"}".to_string();
+
+    // While grant is active, reauthorization leaves content intact
+    reauthorize_tool_result(&cfg, "read_file_chunk", &args, &mut content);
+    assert_eq!(content, "{\"text\":\"fn code() {}\"}");
+
+    // Revoke provider sharing
+    toggle_project_provider_sharing_impl(&cfg, &canon_proj, Some(false)).unwrap();
+
+    // Reauthorization must purge content!
+    reauthorize_tool_result(&cfg, "read_file_chunk", &args, &mut content);
+    assert!(content.contains("Provider sharing is not enabled for this project folder"));
+    assert!(!content.contains("fn code() {}"));
+}
+
+#[tokio::test]
+async fn test_execute_chat_stream_tool_calling_flow() {
+    let env = TestEnv::new("stream_tool_flow");
+    let data_root = env.data_root();
+    let cfg = env.config_dir();
+
+    // Setup granted project folder with a file
+    let proj = env.new_dir("AppProject");
+    let notes = proj.join("notes.txt");
+    std::fs::write(&notes, b"Alpha Bravo Charlie").unwrap();
+    let canon_proj = dunce::canonicalize(&proj)
+        .unwrap()
+        .to_string_lossy()
+        .to_string();
+    let canon_notes = dunce::canonicalize(&notes)
+        .unwrap()
+        .to_string_lossy()
+        .to_string();
+
+    add_project_root_path(&cfg, &proj).unwrap();
+    toggle_project_provider_sharing_impl(&cfg, &canon_proj, Some(true)).unwrap();
+
+    let conv_id = uuid::Uuid::new_v4().to_string();
+    let user_msg = ChatMessage {
+        id: uuid::Uuid::new_v4().to_string(),
+        role: MessageRole::User,
+        content: "Please read notes.txt".to_string(),
+        status: MessageStatus::Complete,
+    };
+    let initial_conv = ConversationDetail {
+        id: conv_id.clone(),
+        title: "Tool Test".to_string(),
+        updated_at: "2026-10-19T10:00:00Z".to_string(),
+        messages: vec![user_msg],
+    };
+    save_conversation_atomic(&data_root, &initial_conv).unwrap();
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+
+    let canon_notes_clone = canon_notes.clone();
+
+    tokio::spawn(async move {
+        let mut request_count = 0;
+        while let Ok((mut socket, _)) = listener.accept().await {
+            request_count += 1;
+            let req_text = read_http_request(&mut socket).await;
+
+            if request_count == 1 {
+                // Round 1: Model requests tool call to read_file_chunk with split arguments
+                let full_args = serde_json::to_string(&serde_json::json!({
+                    "path": canon_notes_clone
+                }))
+                .unwrap();
+                let split_pt = full_args.len() / 2;
+                let arg_part1 = &full_args[..split_pt];
+                let arg_part2 = &full_args[split_pt..];
+
+                let sse_obj1 = serde_json::json!({
+                    "choices": [{
+                        "delta": {
+                            "tool_calls": [{
+                                "index": 0,
+                                "id": "call_read_1",
+                                "type": "function",
+                                "function": {
+                                    "name": "read_file_chunk",
+                                    "arguments": arg_part1
+                                }
+                            }]
+                        },
+                        "finish_reason": null
+                    }]
+                });
+                let sse_obj2 = serde_json::json!({
+                    "choices": [{
+                        "delta": {
+                            "tool_calls": [{
+                                "index": 0,
+                                "function": {
+                                    "arguments": arg_part2
+                                }
+                            }]
+                        },
+                        "finish_reason": "tool_calls"
+                    }]
+                });
+                let part1 = format!("data: {}\n\n", serde_json::to_string(&sse_obj1).unwrap());
+                let part2 = format!("data: {}\n\n", serde_json::to_string(&sse_obj2).unwrap());
+
+                let header = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\nTransfer-Encoding: chunked\r\n\r\n";
+                let _ = socket.write_all(header.as_bytes()).await;
+
+                for p in [part1.as_str(), part2.as_str()] {
+                    let chunk_hdr = format!("{:X}\r\n{}\r\n", p.len(), p);
+                    let _ = socket.write_all(chunk_hdr.as_bytes()).await;
+                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                }
+                let _ = socket.write_all(b"0\r\n\r\n").await;
+            } else if request_count == 2 {
+                // Round 2: Verify request contains tool role message with the file chunk
+                assert!(req_text.contains("\"role\":\"tool\""));
+                assert!(req_text.contains("Alpha Bravo Charlie"));
+
+                // Return final answer
+                let ans = "data: {\"choices\":[{\"delta\":{\"content\":\"Notes say Alpha Bravo Charlie\"}}]}\n\n";
+                let stop = "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n";
+                let done = "data: [DONE]\n\n";
+
+                let header = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\nTransfer-Encoding: chunked\r\n\r\n";
+                let _ = socket.write_all(header.as_bytes()).await;
+
+                for p in [ans, stop, done] {
+                    let chunk_hdr = format!("{:X}\r\n{}\r\n", p.len(), p);
+                    let _ = socket.write_all(chunk_hdr.as_bytes()).await;
+                }
+                let _ = socket.write_all(b"0\r\n\r\n").await;
+                break;
+            }
+        }
+    });
+
+    let store = MockSecretStore::new();
+    let state = ChatState::new(store);
+    let req_id = "req-tool-stream";
+
+    let cancel_rx = state
+        .try_start_request(req_id, &conv_id)
+        .expect("Should acquire active lock");
+
+    let sink = TestEventSink::new();
+    let base_url = format!("http://{addr}/v1");
+
+    super::commands::execute_chat_stream(
+        sink.clone(),
+        state.clone(),
+        data_root.clone(),
+        cfg.clone(),
+        conv_id.clone(),
+        req_id.to_string(),
+        base_url,
+        "test-model".to_string(),
+        None,
+        initial_conv.messages.clone(),
+        cancel_rx,
+    )
+    .await;
+
+    // Verify stream events
+    let events = sink.get_events();
+    let deltas: Vec<String> = events.iter().filter_map(|e| e.delta.clone()).collect();
+    assert_eq!(deltas, vec!["Notes say Alpha Bravo Charlie".to_string()]);
+
+    let terminal_events: Vec<&super::models::ChatStreamPayload> =
+        events.iter().filter(|e| e.done == Some(true)).collect();
+    assert_eq!(terminal_events.len(), 1);
+    assert_eq!(terminal_events[0].status, Some(MessageStatus::Complete));
+    assert_eq!(terminal_events[0].error, None);
+
+    // Verify history non-persistence: disk must ONLY have user message and final assistant message!
+    let loaded = load_conversation_from_disk(&data_root, &conv_id).unwrap();
+    assert_eq!(loaded.messages.len(), 2);
+    assert_eq!(loaded.messages[0].role, MessageRole::User);
+    assert_eq!(loaded.messages[1].role, MessageRole::Assistant);
+    assert_eq!(loaded.messages[1].content, "Notes say Alpha Bravo Charlie");
+    assert_eq!(loaded.messages[1].status, MessageStatus::Complete);
+}
+
+#[tokio::test]
+async fn test_execute_chat_stream_tool_revocation_before_send() {
+    let env = TestEnv::new("stream_revocation");
+    let data_root = env.data_root();
+    let cfg = env.config_dir();
+
+    let proj = env.new_dir("RevokeProject");
+    let file = proj.join("secret_data.txt");
+    std::fs::write(&file, b"CLASSIFIED_INFO").unwrap();
+    let canon_proj = dunce::canonicalize(&proj)
+        .unwrap()
+        .to_string_lossy()
+        .to_string();
+    let canon_file = dunce::canonicalize(&file)
+        .unwrap()
+        .to_string_lossy()
+        .to_string();
+
+    add_project_root_path(&cfg, &proj).unwrap();
+    toggle_project_provider_sharing_impl(&cfg, &canon_proj, Some(true)).unwrap();
+
+    let conv_id = uuid::Uuid::new_v4().to_string();
+    let user_msg = ChatMessage {
+        id: uuid::Uuid::new_v4().to_string(),
+        role: MessageRole::User,
+        content: "Read secret_data.txt".to_string(),
+        status: MessageStatus::Complete,
+    };
+    let initial_conv = ConversationDetail {
+        id: conv_id.clone(),
+        title: "Revoke Test".to_string(),
+        updated_at: "2026-10-19T10:00:00Z".to_string(),
+        messages: vec![user_msg],
+    };
+    save_conversation_atomic(&data_root, &initial_conv).unwrap();
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+
+    let canon_file_clone = canon_file.clone();
+    let cfg_clone = cfg.clone();
+    let canon_proj_clone = canon_proj.clone();
+
+    tokio::spawn(async move {
+        let mut request_count = 0;
+        while let Ok((mut socket, _)) = listener.accept().await {
+            request_count += 1;
+            let req_text = read_http_request(&mut socket).await;
+
+            if request_count == 1 {
+                // Revoke provider sharing BEFORE next round send boundary
+                toggle_project_provider_sharing_impl(&cfg_clone, &canon_proj_clone, Some(false))
+                    .unwrap();
+
+                let full_args = serde_json::to_string(&serde_json::json!({
+                    "path": canon_file_clone
+                }))
+                .unwrap();
+                let sse_obj = serde_json::json!({
+                    "choices": [{
+                        "delta": {
+                            "tool_calls": [{
+                                "index": 0,
+                                "id": "call_rev_1",
+                                "type": "function",
+                                "function": {
+                                    "name": "read_file_chunk",
+                                    "arguments": full_args
+                                }
+                            }]
+                        },
+                        "finish_reason": "tool_calls"
+                    }]
+                });
+                let tool_call = format!("data: {}\n\n", serde_json::to_string(&sse_obj).unwrap());
+
+                let header = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\nTransfer-Encoding: chunked\r\n\r\n";
+                let _ = socket.write_all(header.as_bytes()).await;
+
+                let chunk_hdr = format!("{:X}\r\n{}\r\n", tool_call.len(), tool_call);
+                let _ = socket.write_all(chunk_hdr.as_bytes()).await;
+                let _ = socket.write_all(b"0\r\n\r\n").await;
+            } else if request_count == 2 {
+                // Verify revocation prevented content from crossing send boundary!
+                assert!(
+                    !req_text.contains("CLASSIFIED_INFO"),
+                    "Classified content must NOT cross network boundary"
+                );
+                assert!(
+                    req_text.contains("Provider sharing is not enabled for this project folder")
+                );
+
+                let ans = "data: {\"choices\":[{\"delta\":{\"content\":\"Access revoked.\"}}]}\n\n";
+                let stop = "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n";
+                let done = "data: [DONE]\n\n";
+
+                let header = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\nTransfer-Encoding: chunked\r\n\r\n";
+                let _ = socket.write_all(header.as_bytes()).await;
+
+                for p in [ans, stop, done] {
+                    let chunk_hdr = format!("{:X}\r\n{}\r\n", p.len(), p);
+                    let _ = socket.write_all(chunk_hdr.as_bytes()).await;
+                }
+                let _ = socket.write_all(b"0\r\n\r\n").await;
+                break;
+            }
+        }
+    });
+
+    let store = MockSecretStore::new();
+    let state = ChatState::new(store);
+    let req_id = "req-revoke-stream";
+
+    let cancel_rx = state
+        .try_start_request(req_id, &conv_id)
+        .expect("Should acquire active lock");
+
+    let sink = TestEventSink::new();
+    let base_url = format!("http://{addr}/v1");
+
+    super::commands::execute_chat_stream(
+        sink.clone(),
+        state.clone(),
+        data_root.clone(),
+        cfg.clone(),
+        conv_id.clone(),
+        req_id.to_string(),
+        base_url,
+        "test-model".to_string(),
+        None,
+        initial_conv.messages.clone(),
+        cancel_rx,
+    )
+    .await;
+
+    let events = sink.get_events();
+    let deltas: Vec<String> = events.iter().filter_map(|e| e.delta.clone()).collect();
+    assert_eq!(deltas, vec!["Access revoked.".to_string()]);
+}
+
+#[tokio::test]
+async fn test_execute_chat_stream_tool_rounds_budget_exceeded() {
+    let env = TestEnv::new("stream_rounds_budget");
+    let data_root = env.data_root();
+    let cfg = env.config_dir();
+
+    let conv_id = uuid::Uuid::new_v4().to_string();
+    let user_msg = ChatMessage {
+        id: uuid::Uuid::new_v4().to_string(),
+        role: MessageRole::User,
+        content: "Infinite loop tool caller".to_string(),
+        status: MessageStatus::Complete,
+    };
+    let initial_conv = ConversationDetail {
+        id: conv_id.clone(),
+        title: "Budget Test".to_string(),
+        updated_at: "2026-10-19T10:00:00Z".to_string(),
+        messages: vec![user_msg],
+    };
+    save_conversation_atomic(&data_root, &initial_conv).unwrap();
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+
+    tokio::spawn(async move {
+        // Always respond with a tool call
+        while let Ok((mut socket, _)) = listener.accept().await {
+            let _ = read_http_request(&mut socket).await;
+
+            let tool_call = "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_loop\",\"type\":\"function\",\"function\":{\"name\":\"list_shareable_projects\",\"arguments\":\"{}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\n";
+            let header = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\nTransfer-Encoding: chunked\r\n\r\n";
+            let _ = socket.write_all(header.as_bytes()).await;
+
+            let chunk_hdr = format!("{:X}\r\n{}\r\n", tool_call.len(), tool_call);
+            let _ = socket.write_all(chunk_hdr.as_bytes()).await;
+            let _ = socket.write_all(b"0\r\n\r\n").await;
+        }
+    });
+
+    let store = MockSecretStore::new();
+    let state = ChatState::new(store);
+    let req_id = "req-rounds-budget";
+
+    let cancel_rx = state
+        .try_start_request(req_id, &conv_id)
+        .expect("Should acquire active lock");
+
+    let sink = TestEventSink::new();
+    let base_url = format!("http://{addr}/v1");
+
+    super::commands::execute_chat_stream(
+        sink.clone(),
+        state.clone(),
+        data_root.clone(),
+        cfg.clone(),
+        conv_id.clone(),
+        req_id.to_string(),
+        base_url,
+        "test-model".to_string(),
+        None,
+        initial_conv.messages.clone(),
+        cancel_rx,
+    )
+    .await;
+
+    let events = sink.get_events();
+    let terminal_events: Vec<&super::models::ChatStreamPayload> =
+        events.iter().filter(|e| e.done == Some(true)).collect();
+    assert_eq!(terminal_events.len(), 1);
+    assert_eq!(terminal_events[0].status, Some(MessageStatus::Failed));
+    let err = terminal_events[0].error.as_ref().unwrap();
+    assert!(err.contains("Exceeded maximum tool calling rounds limit"));
+
+    // Active lock freed
+    assert!(
+        state
+            .try_start_request("req-after-budget", &conv_id)
+            .is_ok()
+    );
+}
+
+#[tokio::test]
+async fn test_execute_chat_stream_cancellation_during_tool_round() {
+    let env = TestEnv::new("stream_cancel_tool");
+    let data_root = env.data_root();
+    let cfg = env.config_dir();
+
+    let conv_id = uuid::Uuid::new_v4().to_string();
+    let user_msg = ChatMessage {
+        id: uuid::Uuid::new_v4().to_string(),
+        role: MessageRole::User,
+        content: "Cancel during tool".to_string(),
+        status: MessageStatus::Complete,
+    };
+    let initial_conv = ConversationDetail {
+        id: conv_id.clone(),
+        title: "Cancel Tool".to_string(),
+        updated_at: "2026-10-19T10:00:00Z".to_string(),
+        messages: vec![user_msg],
+    };
+    save_conversation_atomic(&data_root, &initial_conv).unwrap();
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+
+    tokio::spawn(async move {
+        if let Ok((mut socket, _)) = listener.accept().await {
+            let _ = read_http_request(&mut socket).await;
+
+            let tool_call = "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_cancel\",\"type\":\"function\",\"function\":{\"name\":\"list_shareable_projects\",\"arguments\":\"{}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\n";
+            let header = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\nTransfer-Encoding: chunked\r\n\r\n";
+            let _ = socket.write_all(header.as_bytes()).await;
+
+            let chunk_hdr = format!("{:X}\r\n{}\r\n", tool_call.len(), tool_call);
+            let _ = socket.write_all(chunk_hdr.as_bytes()).await;
+            let _ = socket.write_all(b"0\r\n\r\n").await;
+        }
+    });
+
+    let store = MockSecretStore::new();
+    let state = ChatState::new(store);
+    let req_id = "req-cancel-tool";
+
+    let cancel_rx = state
+        .try_start_request(req_id, &conv_id)
+        .expect("Should acquire active lock");
+
+    // Cancel before or immediately as stream begins
+    state.cancel_request(req_id);
+
+    let sink = TestEventSink::new();
+    let base_url = format!("http://{addr}/v1");
+
+    super::commands::execute_chat_stream(
+        sink.clone(),
+        state.clone(),
+        data_root.clone(),
+        cfg.clone(),
+        conv_id.clone(),
+        req_id.to_string(),
+        base_url,
+        "test-model".to_string(),
+        None,
+        initial_conv.messages.clone(),
+        cancel_rx,
+    )
+    .await;
+
+    let events = sink.get_events();
+    let terminal_events: Vec<&super::models::ChatStreamPayload> =
+        events.iter().filter(|e| e.done == Some(true)).collect();
+    assert_eq!(terminal_events.len(), 1);
+    assert_eq!(terminal_events[0].status, Some(MessageStatus::Cancelled));
+
+    let loaded = load_conversation_from_disk(&data_root, &conv_id).unwrap();
+    assert_eq!(loaded.messages.len(), 2);
+    assert_eq!(loaded.messages[1].status, MessageStatus::Cancelled);
+}
+
+#[tokio::test]
+async fn test_execute_chat_stream_tool_denied_traversal_and_malformed() {
+    let env = TestEnv::new("stream_denied_tool");
+    let data_root = env.data_root();
+    let cfg = env.config_dir();
+
+    let conv_id = uuid::Uuid::new_v4().to_string();
+    let user_msg = ChatMessage {
+        id: uuid::Uuid::new_v4().to_string(),
+        role: MessageRole::User,
+        content: "Read traversal file".to_string(),
+        status: MessageStatus::Complete,
+    };
+    let initial_conv = ConversationDetail {
+        id: conv_id.clone(),
+        title: "Denied Tool".to_string(),
+        updated_at: "2026-10-19T10:00:00Z".to_string(),
+        messages: vec![user_msg],
+    };
+    save_conversation_atomic(&data_root, &initial_conv).unwrap();
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+
+    tokio::spawn(async move {
+        let mut request_count = 0;
+        while let Ok((mut socket, _)) = listener.accept().await {
+            request_count += 1;
+            let req_text = read_http_request(&mut socket).await;
+
+            if request_count == 1 {
+                // Model tries path traversal
+                let sse_obj = serde_json::json!({
+                    "choices": [{
+                        "delta": {
+                            "tool_calls": [{
+                                "index": 0,
+                                "id": "call_trav_1",
+                                "type": "function",
+                                "function": {
+                                    "name": "read_file_chunk",
+                                    "arguments": "{\"path\":\"../../etc/shadow\"}"
+                                }
+                            }]
+                        },
+                        "finish_reason": "tool_calls"
+                    }]
+                });
+                let tool_call = format!("data: {}\n\n", serde_json::to_string(&sse_obj).unwrap());
+
+                let header = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\nTransfer-Encoding: chunked\r\n\r\n";
+                let _ = socket.write_all(header.as_bytes()).await;
+
+                let chunk_hdr = format!("{:X}\r\n{}\r\n", tool_call.len(), tool_call);
+                let _ = socket.write_all(chunk_hdr.as_bytes()).await;
+                let _ = socket.write_all(b"0\r\n\r\n").await;
+            } else if request_count == 2 {
+                // Verify request contains the authorization error
+                assert!(req_text.contains("\"role\":\"tool\""));
+                assert!(
+                    req_text.contains("outside approved project folders")
+                        || req_text.contains("blocked")
+                        || req_text.contains("absolute")
+                );
+
+                let ans =
+                    "data: {\"choices\":[{\"delta\":{\"content\":\"Access was denied.\"}}]}\n\n";
+                let stop = "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n";
+                let done = "data: [DONE]\n\n";
+
+                let header = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\nTransfer-Encoding: chunked\r\n\r\n";
+                let _ = socket.write_all(header.as_bytes()).await;
+
+                for p in [ans, stop, done] {
+                    let chunk_hdr = format!("{:X}\r\n{}\r\n", p.len(), p);
+                    let _ = socket.write_all(chunk_hdr.as_bytes()).await;
+                }
+                let _ = socket.write_all(b"0\r\n\r\n").await;
+                break;
+            }
+        }
+    });
+
+    let store = MockSecretStore::new();
+    let state = ChatState::new(store);
+    let req_id = "req-denied-tool";
+
+    let cancel_rx = state
+        .try_start_request(req_id, &conv_id)
+        .expect("Should acquire active lock");
+
+    let sink = TestEventSink::new();
+    let base_url = format!("http://{addr}/v1");
+
+    super::commands::execute_chat_stream(
+        sink.clone(),
+        state.clone(),
+        data_root.clone(),
+        cfg.clone(),
+        conv_id.clone(),
+        req_id.to_string(),
+        base_url,
+        "test-model".to_string(),
+        None,
+        initial_conv.messages.clone(),
+        cancel_rx,
+    )
+    .await;
+
+    let events = sink.get_events();
+    let deltas: Vec<String> = events.iter().filter_map(|e| e.delta.clone()).collect();
+    assert_eq!(deltas, vec!["Access was denied.".to_string()]);
+}
+
+#[test]
+fn tool_default_chunk_fits_serialized_result_budget() {
+    let env = TestEnv::new("escaped_chunk_budget");
+    let cfg = env.config_dir();
+    let proj = env.new_dir("BudgetProject");
+    let file = proj.join("large.txt");
+    std::fs::write(&file, "\t".repeat(100_000)).unwrap();
+    add_project_root_path(&cfg, &proj).unwrap();
+    let root = dunce::canonicalize(&proj)
+        .unwrap()
+        .to_string_lossy()
+        .to_string();
+    toggle_project_provider_sharing_impl(&cfg, &root, Some(true)).unwrap();
+    let args = serde_json::json!({"path": file.to_string_lossy()}).to_string();
+    let result = execute_tool(&cfg, "read_file_chunk", &args);
+    assert!(result.len() < super::tools::MAX_TOOL_RESULT_BYTES);
+    let result: serde_json::Value = serde_json::from_str(&result).unwrap();
+    assert_eq!(result["nextOffset"], 8192);
+    assert_eq!(result["eof"], false);
 }

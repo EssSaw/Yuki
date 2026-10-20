@@ -51,16 +51,54 @@ pub fn build_http_client() -> Result<reqwest::Client, String> {
         .map_err(|e| format!("Failed to create HTTP client: {e}"))
 }
 
-#[derive(Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct OpenAiMessage {
     pub role: &'static str,
     pub content: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ApiMessage {
+    pub role: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_calls: Option<Vec<ApiToolCall>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_call_id: Option<String>,
+}
+
+impl From<OpenAiMessage> for ApiMessage {
+    fn from(m: OpenAiMessage) -> Self {
+        Self {
+            role: m.role.to_string(),
+            content: Some(m.content),
+            tool_calls: None,
+            tool_call_id: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ApiToolCall {
+    pub id: String,
+    #[serde(rename = "type")]
+    pub tool_type: String,
+    pub function: ApiFunctionCall,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ApiFunctionCall {
+    pub name: String,
+    pub arguments: String,
+}
+
 #[derive(Serialize)]
 pub struct ChatCompletionRequest {
     pub model: String,
-    pub messages: Vec<OpenAiMessage>,
+    pub messages: Vec<ApiMessage>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tools: Option<Vec<super::tools::ToolDefinition>>,
     pub stream: bool,
 }
 

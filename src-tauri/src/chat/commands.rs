@@ -4,8 +4,8 @@ use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use super::client::{
-    ChatCompletionRequest, MAX_HISTORY_CHARS, MAX_INPUT_CHARS, MAX_STREAM_BYTES, fetch_models,
-    prepare_bounded_messages, validate_endpoint,
+    ApiFunctionCall, ApiMessage, ApiToolCall, ChatCompletionRequest, MAX_HISTORY_CHARS,
+    MAX_INPUT_CHARS, MAX_STREAM_BYTES, fetch_models, prepare_bounded_messages, validate_endpoint,
 };
 use super::credentials::{SERVICE_NAME, USER_NAME};
 use super::history::{
@@ -18,6 +18,10 @@ use super::models::{
 };
 use super::parser::{ParsedEvent, SseParser};
 use super::state::ChatState;
+use super::tools::{
+    MAX_CUMULATIVE_TOOL_OUTPUT_BYTES, MAX_TOOL_RESULT_BYTES, MAX_TOOL_ROUNDS, MAX_TOTAL_TOOL_CALLS,
+    ToolCallAccumulator, ToolResult, execute_tool, get_chat_tools, reauthorize_tool_result,
+};
 
 const SETTINGS_FILE_NAME: &str = "chat_settings.json";
 
@@ -388,6 +392,7 @@ pub async fn start_chat(
     // 6. Spawn background streaming task and return promptly
     let sink = std::sync::Arc::new(TauriEventSink::new(app.clone()));
     let state_inner = state.inner().clone();
+    let bg_config_dir = config_dir.clone();
     let bg_data_root = data_root.clone();
     let bg_conv_id = resolved_id.clone();
     let bg_req_id = trimmed_req_id.to_string();
@@ -400,6 +405,7 @@ pub async fn start_chat(
             sink,
             state_inner,
             bg_data_root,
+            bg_config_dir,
             bg_conv_id,
             bg_req_id,
             bg_base_url,
@@ -475,6 +481,7 @@ pub async fn execute_chat_stream(
     sink: std::sync::Arc<dyn ChatEventSink>,
     state: ChatState,
     data_root: PathBuf,
+    config_dir: PathBuf,
     conv_id: String,
     req_id: String,
     base_url: String,
@@ -509,76 +516,13 @@ pub async fn execute_chat_stream(
     }
 
     let bounded = prepare_bounded_messages(&history_messages, MAX_HISTORY_CHARS);
-    let base = base_url.trim_end_matches('/');
-    let completions_url = format!("{base}/chat/completions");
+    let mut working_messages: Vec<ApiMessage> = bounded.into_iter().map(ApiMessage::from).collect();
+    let tools = get_chat_tools();
 
-    let req_body = ChatCompletionRequest {
-        model: model.clone(),
-        messages: bounded,
-        stream: true,
-    };
-
-    let mut http_req = state.http_client().post(&completions_url).json(&req_body);
-    if let Some(ref key) = api_key {
-        let trimmed_key = key.trim();
-        if !trimmed_key.is_empty() {
-            http_req = http_req.header("Authorization", format!("Bearer {trimmed_key}"));
-        }
-    }
-
-    let send_result = http_req.send().await;
-    let resp = match send_result {
-        Ok(r) => r,
-        Err(e) => {
-            let sanitized = sanitize_reqwest_error(e, base);
-            let _ = save_terminal_assistant(
-                &data_root,
-                &conv_id,
-                assistant_id,
-                accumulated_content,
-                MessageStatus::Failed,
-            )
-            .await;
-            sink.emit_event(ChatStreamPayload {
-                request_id: req_id.clone(),
-                conversation_id: conv_id,
-                delta: None,
-                done: Some(true),
-                error: Some(sanitized),
-                status: Some(MessageStatus::Failed),
-            });
-            state.finish_request(&req_id);
-            return;
-        }
-    };
-
-    let status = resp.status();
-    if !status.is_success() {
-        let sanitized = sanitize_http_status(status, &model);
-        let _ = save_terminal_assistant(
-            &data_root,
-            &conv_id,
-            assistant_id,
-            accumulated_content,
-            MessageStatus::Failed,
-        )
-        .await;
-        sink.emit_event(ChatStreamPayload {
-            request_id: req_id.clone(),
-            conversation_id: conv_id,
-            delta: None,
-            done: Some(true),
-            error: Some(sanitized),
-            status: Some(MessageStatus::Failed),
-        });
-        state.finish_request(&req_id);
-        return;
-    }
-
-    let mut stream = resp.bytes_stream();
-    let mut parser = SseParser::new();
-    let mut total_bytes = 0usize;
-    let mut stream_completed = false;
+    let mut sent_tool_results: Vec<(usize, ToolResult)> = Vec::new();
+    let mut round = 0usize;
+    let mut total_tool_calls = 0usize;
+    let mut cumulative_tool_output_bytes = 0usize;
 
     loop {
         if *cancel_rx.borrow() {
@@ -602,146 +546,41 @@ pub async fn execute_chat_stream(
             return;
         }
 
-        tokio::select! {
-            _ = cancel_rx.changed() => {
-                if *cancel_rx.borrow() {
-                    let _ = save_terminal_assistant(
-                        &data_root,
-                        &conv_id,
-                        assistant_id,
-                        accumulated_content,
-                        MessageStatus::Cancelled,
-                    )
-                    .await;
-                    sink.emit_event(ChatStreamPayload {
-                        request_id: req_id.clone(),
-                        conversation_id: conv_id,
-                        delta: None,
-                        done: Some(true),
-                        error: Some("Chat was cancelled.".to_string()),
-                        status: Some(MessageStatus::Cancelled),
-                    });
-                    state.finish_request(&req_id);
-                    return;
-                }
-            }
-            item = stream.next() => {
-                match item {
-                    Some(Ok(bytes)) => {
-                        total_bytes += bytes.len();
-                        if total_bytes > MAX_STREAM_BYTES {
-                            let _ = save_terminal_assistant(
-                                &data_root,
-                                &conv_id,
-                                assistant_id,
-                                accumulated_content,
-                                MessageStatus::Failed,
-                            )
-                            .await;
-                            sink.emit_event(ChatStreamPayload {
-                                request_id: req_id.clone(),
-                                conversation_id: conv_id,
-                                delta: None,
-                                done: Some(true),
-                                error: Some("Response exceeded maximum allowed size (5MB).".to_string()),
-                                status: Some(MessageStatus::Failed),
-                            });
-                            state.finish_request(&req_id);
-                            return;
-                        }
+        let base = base_url.trim_end_matches('/');
+        let completions_url = format!("{base}/chat/completions");
 
-                        let text = String::from_utf8_lossy(&bytes);
-                        let events = parser.feed(&text);
-                        for event in events {
-                            match event {
-                                ParsedEvent::Delta(delta) => {
-                                    accumulated_content.push_str(&delta);
-                                    sink.emit_event(ChatStreamPayload {
-                                        request_id: req_id.clone(),
-                                        conversation_id: conv_id.clone(),
-                                        delta: Some(delta),
-                                        done: None,
-                                        error: None,
-                                        status: None,
-                                    });
-                                }
-                                ParsedEvent::Done => {
-                                    stream_completed = true;
-                                }
-                                ParsedEvent::Error(err) => {
-                                    let _ = save_terminal_assistant(
-                                        &data_root,
-                                        &conv_id,
-                                        assistant_id,
-                                        accumulated_content,
-                                        MessageStatus::Failed,
-                                    )
-                                    .await;
-                                    sink.emit_event(ChatStreamPayload {
-                                        request_id: req_id.clone(),
-                                        conversation_id: conv_id,
-                                        delta: None,
-                                        done: Some(true),
-                                        error: Some(err),
-                                        status: Some(MessageStatus::Failed),
-                                    });
-                                    state.finish_request(&req_id);
-                                    return;
-                                }
-                            }
-                        }
+        for (index, result) in &mut sent_tool_results {
+            reauthorize_tool_result(
+                &config_dir,
+                &result.name,
+                &result.arguments,
+                &mut result.content,
+            );
+            working_messages[*index].content = Some(result.content.clone());
+        }
+        let req_body = ChatCompletionRequest {
+            model: model.clone(),
+            messages: working_messages.clone(),
+            tools: Some(tools.clone()),
+            stream: true,
+        };
 
-                        if stream_completed {
-                            break;
-                        }
-                    }
-                    Some(Err(_)) => {
-                        let err_msg = "Stream connection interrupted.".to_string();
-                        let _ = save_terminal_assistant(
-                            &data_root,
-                            &conv_id,
-                            assistant_id,
-                            accumulated_content,
-                            MessageStatus::Failed,
-                        )
-                        .await;
-                        sink.emit_event(ChatStreamPayload {
-                            request_id: req_id.clone(),
-                            conversation_id: conv_id,
-                            delta: None,
-                            done: Some(true),
-                            error: Some(err_msg),
-                            status: Some(MessageStatus::Failed),
-                        });
-                        state.finish_request(&req_id);
-                        return;
-                    }
-                    None => {
-                        break;
-                    }
-                }
+        let mut http_req = state.http_client().post(&completions_url).json(&req_body);
+        if let Some(ref key) = api_key {
+            let trimmed_key = key.trim();
+            if !trimmed_key.is_empty() {
+                http_req = http_req.header("Authorization", format!("Bearer {trimmed_key}"));
             }
         }
-    }
 
-    let tail_events = parser.finish();
-    for event in tail_events {
-        match event {
-            ParsedEvent::Delta(delta) => {
-                accumulated_content.push_str(&delta);
-                sink.emit_event(ChatStreamPayload {
-                    request_id: req_id.clone(),
-                    conversation_id: conv_id.clone(),
-                    delta: Some(delta),
-                    done: None,
-                    error: None,
-                    status: None,
-                });
-            }
-            ParsedEvent::Done => {
-                stream_completed = true;
-            }
-            ParsedEvent::Error(err) => {
+        let send_result = tokio::select! {
+            result = http_req.send() => result,
+            _ = cancel_rx.changed() => { continue; }
+        };
+        let resp = match send_result {
+            Ok(r) => r,
+            Err(e) => {
+                let sanitized = sanitize_reqwest_error(e, base);
                 let _ = save_terminal_assistant(
                     &data_root,
                     &conv_id,
@@ -755,52 +594,519 @@ pub async fn execute_chat_stream(
                     conversation_id: conv_id,
                     delta: None,
                     done: Some(true),
-                    error: Some(err),
+                    error: Some(sanitized),
                     status: Some(MessageStatus::Failed),
                 });
                 state.finish_request(&req_id);
                 return;
             }
+        };
+
+        let status = resp.status();
+        if !status.is_success() {
+            let sanitized = sanitize_http_status(status, &model);
+            let _ = save_terminal_assistant(
+                &data_root,
+                &conv_id,
+                assistant_id,
+                accumulated_content,
+                MessageStatus::Failed,
+            )
+            .await;
+            sink.emit_event(ChatStreamPayload {
+                request_id: req_id.clone(),
+                conversation_id: conv_id,
+                delta: None,
+                done: Some(true),
+                error: Some(sanitized),
+                status: Some(MessageStatus::Failed),
+            });
+            state.finish_request(&req_id);
+            return;
+        }
+
+        let mut stream = resp.bytes_stream();
+        let mut parser = SseParser::new();
+        let mut tool_accumulator = ToolCallAccumulator::new();
+        let mut round_assistant_content = String::new();
+        let mut total_bytes = 0usize;
+        let mut stream_completed = false;
+
+        loop {
+            if *cancel_rx.borrow() {
+                let _ = save_terminal_assistant(
+                    &data_root,
+                    &conv_id,
+                    assistant_id,
+                    accumulated_content,
+                    MessageStatus::Cancelled,
+                )
+                .await;
+                sink.emit_event(ChatStreamPayload {
+                    request_id: req_id.clone(),
+                    conversation_id: conv_id,
+                    delta: None,
+                    done: Some(true),
+                    error: Some("Chat was cancelled.".to_string()),
+                    status: Some(MessageStatus::Cancelled),
+                });
+                state.finish_request(&req_id);
+                return;
+            }
+
+            tokio::select! {
+                _ = cancel_rx.changed() => {
+                    if *cancel_rx.borrow() {
+                        let _ = save_terminal_assistant(
+                            &data_root,
+                            &conv_id,
+                            assistant_id,
+                            accumulated_content,
+                            MessageStatus::Cancelled,
+                        )
+                        .await;
+                        sink.emit_event(ChatStreamPayload {
+                            request_id: req_id.clone(),
+                            conversation_id: conv_id,
+                            delta: None,
+                            done: Some(true),
+                            error: Some("Chat was cancelled.".to_string()),
+                            status: Some(MessageStatus::Cancelled),
+                        });
+                        state.finish_request(&req_id);
+                        return;
+                    }
+                }
+                item = stream.next() => {
+                    match item {
+                        Some(Ok(bytes)) => {
+                            total_bytes += bytes.len();
+                            if total_bytes > MAX_STREAM_BYTES {
+                                let _ = save_terminal_assistant(
+                                    &data_root,
+                                    &conv_id,
+                                    assistant_id,
+                                    accumulated_content,
+                                    MessageStatus::Failed,
+                                )
+                                .await;
+                                sink.emit_event(ChatStreamPayload {
+                                    request_id: req_id.clone(),
+                                    conversation_id: conv_id,
+                                    delta: None,
+                                    done: Some(true),
+                                    error: Some("Response exceeded maximum allowed size (5MB).".to_string()),
+                                    status: Some(MessageStatus::Failed),
+                                });
+                                state.finish_request(&req_id);
+                                return;
+                            }
+
+                            let text = String::from_utf8_lossy(&bytes);
+                            let events = parser.feed(&text);
+                            for event in events {
+                                match event {
+                                    ParsedEvent::Delta(delta) => {
+                                        round_assistant_content.push_str(&delta);
+                                        accumulated_content.push_str(&delta);
+                                        sink.emit_event(ChatStreamPayload {
+                                            request_id: req_id.clone(),
+                                            conversation_id: conv_id.clone(),
+                                            delta: Some(delta),
+                                            done: None,
+                                            error: None,
+                                            status: None,
+                                        });
+                                    }
+                                    ParsedEvent::ToolCallDelta { index, id, name, arguments_delta } => {
+                                        if let Err(e) = tool_accumulator.process_delta(index, id, name, arguments_delta) {
+                                            let _ = save_terminal_assistant(
+                                                &data_root,
+                                                &conv_id,
+                                                assistant_id,
+                                                accumulated_content,
+                                                MessageStatus::Failed,
+                                            )
+                                            .await;
+                                            sink.emit_event(ChatStreamPayload {
+                                                request_id: req_id.clone(),
+                                                conversation_id: conv_id,
+                                                delta: None,
+                                                done: Some(true),
+                                                error: Some(e),
+                                                status: Some(MessageStatus::Failed),
+                                            });
+                                            state.finish_request(&req_id);
+                                            return;
+                                        }
+                                    }
+                                    ParsedEvent::Done => {
+                                        stream_completed = true;
+                                    }
+                                    ParsedEvent::Error(err) => {
+                                        let _ = save_terminal_assistant(
+                                            &data_root,
+                                            &conv_id,
+                                            assistant_id,
+                                            accumulated_content,
+                                            MessageStatus::Failed,
+                                        )
+                                        .await;
+                                        sink.emit_event(ChatStreamPayload {
+                                            request_id: req_id.clone(),
+                                            conversation_id: conv_id,
+                                            delta: None,
+                                            done: Some(true),
+                                            error: Some(err),
+                                            status: Some(MessageStatus::Failed),
+                                        });
+                                        state.finish_request(&req_id);
+                                        return;
+                                    }
+                                }
+                            }
+
+                            if stream_completed {
+                                break;
+                            }
+                        }
+                        Some(Err(_)) => {
+                            let err_msg = "Stream connection interrupted.".to_string();
+                            let _ = save_terminal_assistant(
+                                &data_root,
+                                &conv_id,
+                                assistant_id,
+                                accumulated_content,
+                                MessageStatus::Failed,
+                            )
+                            .await;
+                            sink.emit_event(ChatStreamPayload {
+                                request_id: req_id.clone(),
+                                conversation_id: conv_id,
+                                delta: None,
+                                done: Some(true),
+                                error: Some(err_msg),
+                                status: Some(MessageStatus::Failed),
+                            });
+                            state.finish_request(&req_id);
+                            return;
+                        }
+                        None => {
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        let tail_events = parser.finish();
+        for event in tail_events {
+            match event {
+                ParsedEvent::Delta(delta) => {
+                    round_assistant_content.push_str(&delta);
+                    accumulated_content.push_str(&delta);
+                    sink.emit_event(ChatStreamPayload {
+                        request_id: req_id.clone(),
+                        conversation_id: conv_id.clone(),
+                        delta: Some(delta),
+                        done: None,
+                        error: None,
+                        status: None,
+                    });
+                }
+                ParsedEvent::ToolCallDelta {
+                    index,
+                    id,
+                    name,
+                    arguments_delta,
+                } => {
+                    if let Err(e) = tool_accumulator.process_delta(index, id, name, arguments_delta)
+                    {
+                        let _ = save_terminal_assistant(
+                            &data_root,
+                            &conv_id,
+                            assistant_id,
+                            accumulated_content,
+                            MessageStatus::Failed,
+                        )
+                        .await;
+                        sink.emit_event(ChatStreamPayload {
+                            request_id: req_id.clone(),
+                            conversation_id: conv_id,
+                            delta: None,
+                            done: Some(true),
+                            error: Some(e),
+                            status: Some(MessageStatus::Failed),
+                        });
+                        state.finish_request(&req_id);
+                        return;
+                    }
+                }
+                ParsedEvent::Done => {
+                    stream_completed = true;
+                }
+                ParsedEvent::Error(err) => {
+                    let _ = save_terminal_assistant(
+                        &data_root,
+                        &conv_id,
+                        assistant_id,
+                        accumulated_content,
+                        MessageStatus::Failed,
+                    )
+                    .await;
+                    sink.emit_event(ChatStreamPayload {
+                        request_id: req_id.clone(),
+                        conversation_id: conv_id,
+                        delta: None,
+                        done: Some(true),
+                        error: Some(err),
+                        status: Some(MessageStatus::Failed),
+                    });
+                    state.finish_request(&req_id);
+                    return;
+                }
+            }
+        }
+
+        if !stream_completed {
+            let _ = save_terminal_assistant(
+                &data_root,
+                &conv_id,
+                assistant_id,
+                accumulated_content,
+                MessageStatus::Failed,
+            )
+            .await;
+            sink.emit_event(ChatStreamPayload {
+                request_id: req_id.clone(),
+                conversation_id: conv_id,
+                delta: None,
+                done: Some(true),
+                error: Some("Stream ended before completion was confirmed.".into()),
+                status: Some(MessageStatus::Failed),
+            });
+            state.finish_request(&req_id);
+            return;
+        }
+
+        let mut raw_calls = tool_accumulator.into_calls();
+        for call in &mut raw_calls {
+            if call.id.is_empty() {
+                call.id = format!("call_{}", uuid::Uuid::new_v4());
+            }
+        }
+        if raw_calls.is_empty() {
+            // Normal completion without tools
+            let saved = save_terminal_assistant(
+                &data_root,
+                &conv_id,
+                assistant_id,
+                accumulated_content,
+                MessageStatus::Complete,
+            )
+            .await;
+            sink.emit_event(ChatStreamPayload {
+                request_id: req_id.clone(),
+                conversation_id: conv_id,
+                delta: None,
+                done: Some(true),
+                error: saved.as_ref().err().map(|_| "Response received but history could not be saved. Do not assume it will survive restart.".to_string()),
+                status: Some(if saved.is_ok() { MessageStatus::Complete } else { MessageStatus::Failed }),
+            });
+            state.finish_request(&req_id);
+            return;
+        }
+
+        // Tools were requested
+        round += 1;
+        if round > MAX_TOOL_ROUNDS {
+            let _ = save_terminal_assistant(
+                &data_root,
+                &conv_id,
+                assistant_id,
+                accumulated_content,
+                MessageStatus::Failed,
+            )
+            .await;
+            sink.emit_event(ChatStreamPayload {
+                request_id: req_id.clone(),
+                conversation_id: conv_id,
+                delta: None,
+                done: Some(true),
+                error: Some(format!(
+                    "Exceeded maximum tool calling rounds limit ({}).",
+                    MAX_TOOL_ROUNDS
+                )),
+                status: Some(MessageStatus::Failed),
+            });
+            state.finish_request(&req_id);
+            return;
+        }
+
+        if total_tool_calls + raw_calls.len() > MAX_TOTAL_TOOL_CALLS {
+            let _ = save_terminal_assistant(
+                &data_root,
+                &conv_id,
+                assistant_id,
+                accumulated_content,
+                MessageStatus::Failed,
+            )
+            .await;
+            sink.emit_event(ChatStreamPayload {
+                request_id: req_id.clone(),
+                conversation_id: conv_id,
+                delta: None,
+                done: Some(true),
+                error: Some(format!(
+                    "Exceeded maximum total tool calls limit ({}).",
+                    MAX_TOTAL_TOOL_CALLS
+                )),
+                status: Some(MessageStatus::Failed),
+            });
+            state.finish_request(&req_id);
+            return;
+        }
+        total_tool_calls += raw_calls.len();
+
+        if *cancel_rx.borrow() {
+            let _ = save_terminal_assistant(
+                &data_root,
+                &conv_id,
+                assistant_id,
+                accumulated_content,
+                MessageStatus::Cancelled,
+            )
+            .await;
+            sink.emit_event(ChatStreamPayload {
+                request_id: req_id.clone(),
+                conversation_id: conv_id,
+                delta: None,
+                done: Some(true),
+                error: Some("Chat was cancelled.".to_string()),
+                status: Some(MessageStatus::Cancelled),
+            });
+            state.finish_request(&req_id);
+            return;
+        }
+
+        // Execute tools
+        let mut tool_results: Vec<ToolResult> = Vec::new();
+        for mut call in raw_calls.clone() {
+            if *cancel_rx.borrow() {
+                let _ = save_terminal_assistant(
+                    &data_root,
+                    &conv_id,
+                    assistant_id,
+                    accumulated_content,
+                    MessageStatus::Cancelled,
+                )
+                .await;
+                sink.emit_event(ChatStreamPayload {
+                    request_id: req_id.clone(),
+                    conversation_id: conv_id,
+                    delta: None,
+                    done: Some(true),
+                    error: Some("Chat was cancelled.".to_string()),
+                    status: Some(MessageStatus::Cancelled),
+                });
+                state.finish_request(&req_id);
+                return;
+            }
+
+            if call.id.is_empty() {
+                call.id = format!("call_{}", uuid::Uuid::new_v4());
+            }
+
+            if cumulative_tool_output_bytes >= MAX_CUMULATIVE_TOOL_OUTPUT_BYTES {
+                tool_results.push(ToolResult {
+                    id: call.id,
+                    name: call.name,
+                    arguments: call.arguments,
+                    content: serde_json::to_string(&serde_json::json!({
+                        "error": "Cumulative tool output budget exceeded for this chat turn."
+                    }))
+                    .unwrap(),
+                });
+                continue;
+            }
+
+            let output_str = execute_tool(&config_dir, &call.name, &call.arguments);
+            let bounded_output = if output_str.len() > MAX_TOOL_RESULT_BYTES {
+                serde_json::to_string(&serde_json::json!({
+                    "error": "Tool result exceeded maximum allowed size (64KB)."
+                }))
+                .unwrap()
+            } else {
+                output_str
+            };
+
+            cumulative_tool_output_bytes += bounded_output.len();
+            if cumulative_tool_output_bytes > MAX_CUMULATIVE_TOOL_OUTPUT_BYTES {
+                tool_results.push(ToolResult {
+                    id: call.id,
+                    name: call.name,
+                    arguments: call.arguments,
+                    content: serde_json::to_string(&serde_json::json!({
+                        "error": "Cumulative tool output budget exceeded for this chat turn."
+                    }))
+                    .unwrap(),
+                });
+            } else {
+                tool_results.push(ToolResult {
+                    id: call.id,
+                    name: call.name,
+                    arguments: call.arguments,
+                    content: bounded_output,
+                });
+            }
+        }
+
+        // Reauthorize sharing before sending tool results across the network boundary
+        for result in &mut tool_results {
+            reauthorize_tool_result(
+                &config_dir,
+                &result.name,
+                &result.arguments,
+                &mut result.content,
+            );
+        }
+
+        // Add assistant turn with tool calls and tool responses to working_messages
+        let assistant_tool_calls: Vec<ApiToolCall> = raw_calls
+            .iter()
+            .map(|c| ApiToolCall {
+                id: if c.id.is_empty() {
+                    format!("call_{}", uuid::Uuid::new_v4())
+                } else {
+                    c.id.clone()
+                },
+                tool_type: "function".to_string(),
+                function: ApiFunctionCall {
+                    name: c.name.clone(),
+                    arguments: c.arguments.clone(),
+                },
+            })
+            .collect();
+
+        working_messages.push(ApiMessage {
+            role: "assistant".to_string(),
+            content: if round_assistant_content.is_empty() {
+                None
+            } else {
+                Some(round_assistant_content)
+            },
+            tool_calls: Some(assistant_tool_calls),
+            tool_call_id: None,
+        });
+
+        for res in tool_results {
+            sent_tool_results.push((working_messages.len(), res.clone()));
+            working_messages.push(ApiMessage {
+                role: "tool".to_string(),
+                content: Some(res.content),
+                tool_calls: None,
+                tool_call_id: Some(res.id),
+            });
         }
     }
-
-    if !stream_completed {
-        let _ = save_terminal_assistant(
-            &data_root,
-            &conv_id,
-            assistant_id,
-            accumulated_content,
-            MessageStatus::Failed,
-        )
-        .await;
-        sink.emit_event(ChatStreamPayload {
-            request_id: req_id.clone(),
-            conversation_id: conv_id,
-            delta: None,
-            done: Some(true),
-            error: Some("Stream ended before completion was confirmed.".into()),
-            status: Some(MessageStatus::Failed),
-        });
-        state.finish_request(&req_id);
-        return;
-    }
-
-    // Normal completion
-    let saved = save_terminal_assistant(
-        &data_root,
-        &conv_id,
-        assistant_id,
-        accumulated_content,
-        MessageStatus::Complete,
-    )
-    .await;
-    sink.emit_event(ChatStreamPayload {
-        request_id: req_id.clone(),
-        conversation_id: conv_id,
-        delta: None,
-        done: Some(true),
-        error: saved.as_ref().err().map(|_| "Response received but history could not be saved. Do not assume it will survive restart.".to_string()),
-        status: Some(if saved.is_ok() { MessageStatus::Complete } else { MessageStatus::Failed }),
-    });
-    state.finish_request(&req_id);
 }
