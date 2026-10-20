@@ -5,12 +5,18 @@ use super::client::{
     get_bound_unity_state_core, list_connected_unity_instances_core,
 };
 use super::discovery::discover_mcp_candidates_core;
-use super::grants::{approve_endpoint_impl, get_mcp_grants_impl, revoke_endpoint_impl};
+use super::grants::{
+    approve_endpoint_impl, approve_executable_impl, get_mcp_executable_grants_impl,
+    get_mcp_grants_impl, revoke_endpoint_impl, revoke_executable_impl,
+    validate_and_canonicalize_executable,
+};
 use super::models::{
     BoundUnityState, McpConnectionResult, McpDisconnectResult, McpDiscoveryResult,
-    McpEndpointGrant, McpGrantResult, UnityInstanceInfo,
+    McpEndpointGrant, McpExecutableGrant, McpExecutableGrantResult, McpGrantResult,
+    McpStdioCapabilities, McpStdioConnectionResult, UnityInstanceInfo,
 };
 use super::session::McpSessionManager;
+use super::stdio::{connect_approved_mcp_stdio_core, list_stdio_capabilities_core};
 use super::url::validate_and_canonicalize_loopback_url;
 
 #[tauri::command]
@@ -53,6 +59,36 @@ pub fn get_mcp_grants(app: AppHandle) -> Result<Vec<McpEndpointGrant>, String> {
 }
 
 #[tauri::command]
+pub fn approve_mcp_executable(
+    app: AppHandle,
+    path: String,
+) -> Result<McpExecutableGrantResult, String> {
+    let config_dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
+    approve_executable_impl(&config_dir, &path)
+}
+
+#[tauri::command]
+pub async fn revoke_mcp_executable(
+    app: AppHandle,
+    session_manager: State<'_, McpSessionManager>,
+    path: String,
+) -> Result<McpExecutableGrantResult, String> {
+    let config_dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
+    if let Ok(canonical) = validate_and_canonicalize_executable(&path) {
+        session_manager
+            .invalidate_executable_sessions(&canonical.to_string_lossy())
+            .await;
+    }
+    revoke_executable_impl(&config_dir, &path)
+}
+
+#[tauri::command]
+pub fn get_mcp_executable_grants(app: AppHandle) -> Result<Vec<McpExecutableGrant>, String> {
+    let config_dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
+    get_mcp_executable_grants_impl(&config_dir)
+}
+
+#[tauri::command]
 pub async fn connect_approved_mcp_endpoint(
     app: AppHandle,
     session_manager: State<'_, McpSessionManager>,
@@ -60,6 +96,26 @@ pub async fn connect_approved_mcp_endpoint(
 ) -> Result<McpConnectionResult, String> {
     let config_dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
     connect_approved_mcp_endpoint_core(&config_dir, &session_manager, &endpoint).await
+}
+
+#[tauri::command]
+pub async fn connect_approved_mcp_stdio(
+    app: AppHandle,
+    session_manager: State<'_, McpSessionManager>,
+    executable_path: String,
+) -> Result<McpStdioConnectionResult, String> {
+    let config_dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
+    connect_approved_mcp_stdio_core(&config_dir, &session_manager, &executable_path).await
+}
+
+#[tauri::command]
+pub async fn list_mcp_stdio_capabilities(
+    app: AppHandle,
+    session_manager: State<'_, McpSessionManager>,
+    session_id: String,
+) -> Result<McpStdioCapabilities, String> {
+    let config_dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
+    list_stdio_capabilities_core(&config_dir, &session_manager, &session_id).await
 }
 
 #[tauri::command]

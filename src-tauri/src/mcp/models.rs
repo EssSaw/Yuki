@@ -187,3 +187,83 @@ pub struct McpDisconnectResult {
     pub success: bool,
     pub message: String,
 }
+
+/// Persisted user approval grant for an exact canonical local executable.
+/// Completely separate from loopback endpoint grants and provider-sharing grants.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub struct McpExecutableGrant {
+    pub canonical_path: String,
+    pub approved_at: String,
+}
+
+/// Result of an executable grant approval or revocation action.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct McpExecutableGrantResult {
+    pub canonical_path: String,
+    pub is_approved: bool,
+    pub approved_executables: Vec<McpExecutableGrant>,
+}
+
+/// Connection result returned after successfully launching and initializing an approved MCP stdio executable.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct McpStdioConnectionResult {
+    pub session_id: String,
+    pub canonical_path: String,
+    pub transport: String,
+    pub protocol_version: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub server_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub server_version: Option<String>,
+    pub process_id: u32,
+}
+
+/// Bounded metadata for a tool discovered over MCP.
+/// Exposed for future version-reviewed allowlist; not an authorization for execution.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct McpToolMetadata {
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub input_schema: Option<serde_json::Value>,
+}
+
+/// Bounded metadata for a resource discovered over MCP.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct McpResourceMetadata {
+    pub uri: String,
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mime_type: Option<String>,
+}
+
+/// Explicit status of official editor binding.
+/// Clearly indicates if binding is pending editor Project Settings approval or undocumented,
+/// preventing false claims of verified project identity.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum McpEditorBindingStatus {
+    PendingOrUndocumented { details: String },
+}
+
+/// Aggregate capability inventory returned to local caller after querying an initialized stdio session.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct McpStdioCapabilities {
+    pub session_id: String,
+    pub canonical_path: String,
+    pub protocol_version: String,
+    pub tools: Vec<McpToolMetadata>,
+    pub resources: Vec<McpResourceMetadata>,
+    pub editor_binding_status: McpEditorBindingStatus,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub warnings: Vec<String>,
+}

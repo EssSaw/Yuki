@@ -1,5 +1,22 @@
 # Current handoff
 
+## Official Unity relay integration (2026-10-20)
+
+User initial HTTP connection failed with SESSION_404; supplied relay metadata identifies
+Unity Technologies official stdio relay, not CoplayDev HTTP. Research verified external
+client launch relay_win.exe --mcp and Unity Pending Connections approval. User explicitly
+approved stdio adapter but FIXTURES ONLY; real relay was not launched or modified.
+Implemented separate executable grants, fixed-argument explicit launch, bounded newline
+JSON-RPC init/inventory, owned-child cleanup/revocation and separate Settings controls.
+Official editor binding remains pending/undocumented; no model-facing Unity tools or
+provider transmission added. Initial HTTP404 now distinguished from expired sessions.
+Validated 160 native tests, 95 frontend tests, frontend and Windows release builds.
+Parent set Cargo default-run=yuki after fixture binary exposed Tauri ambiguity.
+Next manual acceptance: approve official relay executable in Settings, explicitly connect,
+accept Yuki in Unity Pending Connections, inspect capabilities then disconnect/revoke.
+No live connection or rendered narrow visual acceptance claimed.
+
+
 ## Notebook redesign and local MCP sessions (2026-10-20)
 
 User reports Notes functionality works, rejected its initial appearance, and requested

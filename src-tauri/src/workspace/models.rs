@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::mcp::models::McpEndpointGrant;
+use crate::mcp::models::{McpEndpointGrant, McpExecutableGrant};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "camelCase", default)]
@@ -9,6 +9,8 @@ pub struct WorkspaceSettings {
     pub project_roots: Vec<String>,
     pub provider_sharing_grants: Vec<String>,
     pub approved_mcp_endpoints: Vec<McpEndpointGrant>,
+    #[serde(default)]
+    pub approved_mcp_executables: Vec<McpExecutableGrant>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

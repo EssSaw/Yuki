@@ -181,3 +181,121 @@ As established in integration research on CoplayDev/unity-mcp `v10.3.0`, HTTP in
 | `get_bound_unity_state` | `session_id: String` | `BoundUnityState` | Returns current bound instance, editor state, and local project root verification status. |
 | `disconnect` | `session_id: String` | `McpDisconnectResult` | Invalidates and purges the session from active memory. |
 | `disconnect_mcp_session` | `session_id: String` | `McpDisconnectResult` | Compatibility alias for `disconnect`. |
+
+---
+
+# Native Official Unity Stdio Adapter Foundation
+
+Following the addition of the official Unity AI Assistant relay (`com.unity.ai.assistant@2.7`) installed at `%USERPROFILE%\.unity\relay\relay_win.exe`, this foundation establishes a native stdio adapter in Yuki (`src-tauri/src/mcp/stdio.rs`).
+
+## Separation from CoplayDev HTTP Transport
+
+Yuki maintains strict architectural and operational separation between the two Unity MCP transports:
+- **CoplayDev HTTP Transport**: Connects over loopback HTTP/SSE (`http://localhost:8080/mcp`) to a multi-instance server exposing `mcpforunity://instances` and `set_active_instance`.
+- **Official Unity Stdio Transport**: Launches an approved native relay executable with fixed argument `--mcp`, communicating over stdin/stdout via line-delimited JSON-RPC 2.0. The relay communicates out-of-band with local Unity Editor instances via local IPC (named pipes on Windows / domain sockets on POSIX). Unity Editor displays approval under `Project Settings > AI > Unity MCP` (Pending Connections Accept/Deny).
+- **No Resource Reuse**: CoplayDev custom instance resources (`mcpforunity://instances`, `set_active_instance`) are **never** queried on or mixed with the official relay.
+- **Honest Editor Binding Status**: The official editor-binding handshake occurs between the relay and the Unity Editor. Because this protocol is local and internal to the relay, Yuki reports `editorBindingStatus` honestly as `pendingOrUndocumented` without asserting false verified editor identity.
+
+## HTTP 404 Distinction: Initial Endpoint vs. Expired Session
+
+When diagnosing connection failures against loopback HTTP servers:
+- **`ENDPOINT_404:`**: Returned on initial connection attempt (`session_header = None`) when the requested MCP route does not exist on the HTTP server. Wording: *"ENDPOINT_404: MCP server returned 404 Not Found (endpoint URL not found on server). Check the server configuration or URL path."* Yuki does not attempt blind URL workarounds or path mutations.
+- **`SESSION_404:`**: Returned on subsequent requests when an established session token (`session_header = Some(...)`) has expired or been purged on the server. Wording: *"SESSION_404: MCP server returned 404 Not Found (session expired or not found). A fresh connection and explicit rebind is required without replay."* Yuki marks the session as expired immediately and requires an explicit fresh connection.
+
+## Executable Grant Model & Security Boundaries
+
+- **Separate Grant Store**: Executable grants (`approvedMcpExecutables`) are stored in `WorkspaceSettings` independently from HTTP endpoint grants (`approvedMcpEndpoints`) and provider-sharing grants (`providerSharingGrants`).
+- **Canonical Executable Validation**:
+  - Path must be absolute.
+  - File must exist on disk and be a regular file (`canonical.is_file()`).
+  - Symlinks and NTFS junctions/reparse points (`file_attributes & 0x400`) are strictly rejected both before and after canonicalization.
+  - On Windows, file extension must be `.exe`.
+  - Canonicalization uses `dunce::canonicalize` to eliminate DOS 8.3 short paths and relative components.
+- **No Model Control / No Auto-Launch**: Executable paths cannot be chosen or approved by LLMs or auto-launched upon filesystem discovery or app mount. User must explicitly trigger `approve_mcp_executable` and `connect_approved_mcp_stdio`.
+- **Fixed Arguments & No Shell Execution**:
+  - The process is spawned directly using `std::process::Command::new(canonical).arg("--mcp")`.
+  - No shell wrapper (`cmd.exe`, `powershell.exe`, `/bin/sh`) is ever used.
+  - No additional command-line arguments are accepted from configuration or models.
+  - No environment variable ingestion: runs with clean inherited process environment without executing user-defined scripts or injecting sensitive variables.
+
+## Process Lifecycle & Targeted Reaping
+
+- **Owned PID Reaping Only**: Child process handles (`Child`) are stored in thread-safe memory wrappers (`Arc<Mutex<Option<Child>>>`). When disconnecting, revoking grants, or on communication error, the process is terminated and waited upon (`child.kill()`, `child.wait()`) targeting the exact owned PID. Yuki **never** executes broad process-name kills (`taskkill /IM`, `Stop-Process -Name`).
+- **Revocation Cleanup**: Calling `revoke_mcp_executable` immediately terminates and purges all running sessions tied to that canonical executable path before removing the grant from `settings.json`.
+- **Capacity Limits**: Stdio sessions share the active concurrency ceiling (`MAX_ACTIVE_MCP_SESSIONS = 5`) with HTTP sessions.
+
+## Stdio Framing, Parsing & Resource Limits
+
+- **Line-Delimited JSON-RPC Parser**: Stdout reader thread parses JSON-RPC 2.0 messages delimited by `\n`.
+- **Bounded Line Buffer**: Max response size is capped at 1 MiB (`MAX_MCP_RESPONSE_BYTES = 1,048,576`). Lines exceeding this bound yield `StdoutMessage::Oversized` and terminate the session.
+- **Safely Drained Stderr**: A dedicated detached reader drains child stderr continuously into a bounded 16 KiB buffer to prevent OS pipe deadlock. Stderr content is **never** logged to disk or exposed to AI model contexts to prevent credential leakage.
+- **Deadlines**: Handshake and request execution enforce a 5000 ms timeout (`MCP_REQUEST_TIMEOUT_MS`).
+- **Protocol Version Negotiation**: Proposes `2024-11-05`, verifies server compatibility against `SUPPORTED_MCP_PROTOCOL_VERSIONS`, and dispatches `notifications/initialized`.
+
+## Capabilities & Tool Allowlisting Model
+
+- **Metadata Bounding**: Queries `tools/list` and `resources/list` with strict bounds (maximum 100 items, descriptions truncated to 500 characters).
+- **Allowlist Read-Only Guarantee**: Discovered tools and resources are surfaced for user inspection and future version-reviewed allowlisting only; `readOnlyHint` does not grant blanket execution authorization.
+
+## Stdio Tauri IPC Commands & Hard UI API Fields
+
+### Tauri Commands
+
+| Command | Parameters | Return Type | Description |
+|---|---|---|---|
+| `approve_mcp_executable` | `path: String` | `McpExecutableGrantResult` | Validates, canonicalizes, and approves a local executable file path. |
+| `revoke_mcp_executable` | `path: String` | `McpExecutableGrantResult` | Revokes approval and cleanly terminates/reaps any active sessions for this executable. |
+| `get_mcp_executable_grants` | - | `Vec<McpExecutableGrant>` | Lists all currently approved executable grants. |
+| `connect_approved_mcp_stdio` | `executable_path: String` | `McpStdioConnectionResult` | Verifies grant, spawns child with `--mcp`, performs handshake, and stores active session. |
+| `list_mcp_stdio_capabilities` | `session_id: String` | `McpStdioCapabilities` | Queries bounded tools and resources metadata and reports editor binding status. |
+| `disconnect` / `disconnect_mcp_session` | `session_id: String` | `McpDisconnectResult` | Kills/reaps owned child process and removes session from active memory. |
+
+### Hard UI Settings Contract & Field Types
+
+For Hard UI settings views presenting official Unity relay launch-consent:
+
+```typescript
+export interface McpExecutableGrant {
+  canonicalPath: string; // Absolute canonical path to the approved relay binary
+  approvedAt: string;     // ISO 8601 UTC timestamp of explicit user grant
+}
+
+export interface McpExecutableGrantResult {
+  canonicalPath: string;
+  isApproved: boolean;
+  approvedExecutables: McpExecutableGrant[];
+}
+
+export interface McpStdioConnectionResult {
+  sessionId: string;       // Unique UUID for the active session in memory
+  canonicalPath: string;   // Canonical executable path
+  transport: "stdio";      // Explicit stdio transport indicator
+  protocolVersion: string; // Negotiated MCP protocol version (e.g. "2024-11-05")
+  serverName?: string;     // Reported server name (e.g. "Unity AI Assistant Relay")
+  serverVersion?: string;  // Reported server version (e.g. "2.7.0")
+  processId: number;       // Owned child process OS PID
+}
+
+export type McpEditorBindingStatus =
+  | { type: "pendingOrUndocumented"; details: string }
+  | { type: "bound"; projectPath: string };
+
+export interface McpToolMetadata {
+  name: string;
+  description?: string;
+  inputSchema?: Record<string, unknown>;
+}
+
+export interface McpResourceMetadata {
+  uri: string;
+  name: string;
+  description?: string;
+  mimeType?: string;
+}
+
+export interface McpStdioCapabilities {
+  tools: McpToolMetadata[];
+  resources: McpResourceMetadata[];
+  editorBindingStatus: McpEditorBindingStatus;
+}
+```

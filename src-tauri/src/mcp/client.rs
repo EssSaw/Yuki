@@ -73,12 +73,19 @@ pub async fn send_jsonrpc_post(
         }
     })?;
 
-    // Handle 404: Session expired or missing endpoint
+    // Handle 404: distinguish initial endpoint missing from expired established session
     if resp.status() == reqwest::StatusCode::NOT_FOUND {
-        return Err(
-            "SESSION_404: MCP server returned 404 Not Found (session expired or endpoint missing). A fresh connection and explicit rebind is required without replay."
-                .to_string(),
-        );
+        if session_header.is_some() {
+            return Err(
+                "SESSION_404: MCP server returned 404 Not Found (session expired or not found). A fresh connection and explicit rebind is required without replay."
+                    .to_string(),
+            );
+        } else {
+            return Err(
+                "ENDPOINT_404: MCP server returned 404 Not Found (endpoint URL not found on server). Check the server configuration or URL path."
+                    .to_string(),
+            );
+        }
     }
 
     if !resp.status().is_success() {
@@ -251,7 +258,11 @@ pub async fn send_jsonrpc_notification(
     })?;
 
     if resp.status() == reqwest::StatusCode::NOT_FOUND {
-        return Err("SESSION_404: MCP server returned 404 Not Found on notification.".to_string());
+        if session_header.is_some() {
+            return Err("SESSION_404: MCP server returned 404 Not Found on notification (session expired or not found).".to_string());
+        } else {
+            return Err("ENDPOINT_404: MCP server returned 404 Not Found on notification (endpoint URL not found on server).".to_string());
+        }
     }
 
     let new_session_hdr = resp
@@ -934,19 +945,10 @@ pub fn verify_project_root_locally(
     ))
 }
 
-/// Cleanly disconnects an active MCP session and removes all session state from memory.
+/// Cleanly disconnects an active MCP session (HTTP or Stdio) and removes all session state from memory.
 pub async fn disconnect_session_core(
     session_manager: &McpSessionManager,
     session_id: &str,
 ) -> McpDisconnectResult {
-    let success = session_manager.remove_session(session_id).await;
-    McpDisconnectResult {
-        session_id: session_id.to_string(),
-        success,
-        message: if success {
-            "MCP session disconnected cleanly.".to_string()
-        } else {
-            "MCP session was not found or already disconnected.".to_string()
-        },
-    }
+    session_manager.disconnect_any(session_id).await
 }

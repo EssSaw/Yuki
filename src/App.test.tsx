@@ -96,6 +96,7 @@ describe("9router connection settings", () => {
         return { baseUrl: "http://localhost:8000/v1", model: "llama-3-8b", hasApiKey: true };
       }
       if (command === "list_mcp_candidates") { return { candidates: [], scannedRoots: [], configsInspected: [], warnings: [] }; }
+      if (command === "get_mcp_executable_grants") return [];
       if (command === "get_mcp_grants") { return []; }
       if (command === "get_workspace_settings") {
         return { dataRoot: "D:\\Yuki", projectRoots: [] };
@@ -130,6 +131,7 @@ describe("9router connection settings", () => {
         return { baseUrl: "http://localhost:8000/v1", model: "", hasApiKey: false };
       }
       if (command === "list_mcp_candidates") { return { candidates: [], scannedRoots: [], configsInspected: [], warnings: [] }; }
+      if (command === "get_mcp_executable_grants") return [];
       if (command === "get_mcp_grants") { return []; }
       if (command === "get_workspace_settings") {
         return { dataRoot: null, projectRoots: [] };
@@ -159,6 +161,7 @@ describe("9router connection settings", () => {
         return { baseUrl: "http://localhost:8000/v1", model: "", hasApiKey: false };
       }
       if (command === "list_mcp_candidates") { return { candidates: [], scannedRoots: [], configsInspected: [], warnings: [] }; }
+      if (command === "get_mcp_executable_grants") return [];
       if (command === "get_mcp_grants") { return []; }
       if (command === "get_workspace_settings") {
         return { dataRoot: null, projectRoots: [] };
@@ -187,6 +190,7 @@ describe("9router connection settings", () => {
     vi.mocked(invoke).mockImplementation(async (command, args) => {
       if (command === "get_chat_settings") return currentSettings;
       if (command === "list_mcp_candidates") return { candidates: [], scannedRoots: [], configsInspected: [], warnings: [] };
+      if (command === "get_mcp_executable_grants") return [];
       if (command === "get_mcp_grants") return [];
       if (command === "get_workspace_settings") return { dataRoot: null, projectRoots: [] };
       if (command === "save_chat_settings") {
@@ -227,6 +231,7 @@ describe("9router connection settings", () => {
         return { baseUrl: "http://localhost:8000/v1", model: "llama3", hasApiKey: true };
       }
       if (command === "list_mcp_candidates") return { candidates: [], scannedRoots: [], configsInspected: [], warnings: [] };
+      if (command === "get_mcp_executable_grants") return [];
       if (command === "get_mcp_grants") return [];
       if (command === "get_workspace_settings") return { dataRoot: null, projectRoots: [] };
       if (command === "save_chat_settings") {
@@ -257,6 +262,7 @@ describe("9router connection settings", () => {
         return { baseUrl: "http://localhost:8000/v1", model: "llama3", hasApiKey: false };
       }
       if (command === "list_mcp_candidates") return { candidates: [], scannedRoots: [], configsInspected: [], warnings: [] };
+      if (command === "get_mcp_executable_grants") return [];
       if (command === "get_mcp_grants") return [];
       if (command === "get_workspace_settings") return { dataRoot: null, projectRoots: [] };
       if (command === "save_chat_settings") {
@@ -306,6 +312,7 @@ describe("chat streaming and request matching", () => {
         return [];
       }
       if (command === "list_mcp_candidates") return { candidates: [], scannedRoots: [], configsInspected: [], warnings: [] };
+      if (command === "get_mcp_executable_grants") return [];
       if (command === "get_mcp_grants") return [];
       if (command === "get_workspace_settings") return { dataRoot: null, projectRoots: [] };
       if (command === "start_chat") {
@@ -383,6 +390,7 @@ describe("chat streaming and request matching", () => {
       }
       if (command === "list_conversations") return [];
       if (command === "list_mcp_candidates") return { candidates: [], scannedRoots: [], configsInspected: [], warnings: [] };
+      if (command === "get_mcp_executable_grants") return [];
       if (command === "get_mcp_grants") return [];
       if (command === "get_workspace_settings") return { dataRoot: null, projectRoots: [] };
       if (command === "start_chat") {
@@ -440,6 +448,7 @@ describe("chat streaming and request matching", () => {
       }
       if (command === "list_conversations") return [];
       if (command === "list_mcp_candidates") return { candidates: [], scannedRoots: [], configsInspected: [], warnings: [] };
+      if (command === "get_mcp_executable_grants") return [];
       if (command === "get_mcp_grants") return [];
       if (command === "get_workspace_settings") return { dataRoot: null, projectRoots: [] };
       if (command === "start_chat") {
@@ -485,6 +494,7 @@ describe("chat cancellation", () => {
       }
       if (command === "list_conversations") return [];
       if (command === "list_mcp_candidates") return { candidates: [], scannedRoots: [], configsInspected: [], warnings: [] };
+      if (command === "get_mcp_executable_grants") return [];
       if (command === "get_mcp_grants") return [];
       if (command === "get_workspace_settings") return { dataRoot: null, projectRoots: [] };
       if (command === "start_chat") {
@@ -524,6 +534,7 @@ describe("chat cancellation", () => {
       }
       if (command === "list_conversations") return [];
       if (command === "list_mcp_candidates") return { candidates: [], scannedRoots: [], configsInspected: [], warnings: [] };
+      if (command === "get_mcp_executable_grants") return [];
       if (command === "get_mcp_grants") return [];
       if (command === "get_workspace_settings") return { dataRoot: null, projectRoots: [] };
       if (command === "start_chat") {
@@ -563,6 +574,7 @@ describe("chat cancellation", () => {
       }
       if (command === "list_conversations") return [];
       if (command === "list_mcp_candidates") return { candidates: [], scannedRoots: [], configsInspected: [], warnings: [] };
+      if (command === "get_mcp_executable_grants") return [];
       if (command === "get_mcp_grants") return [];
       if (command === "get_workspace_settings") return { dataRoot: null, projectRoots: [] };
       if (command === "start_chat") {
@@ -604,6 +616,7 @@ describe("failed start and retry", () => {
       }
       if (command === "list_conversations") return [];
       if (command === "list_mcp_candidates") return { candidates: [], scannedRoots: [], configsInspected: [], warnings: [] };
+      if (command === "get_mcp_executable_grants") return [];
       if (command === "get_mcp_grants") return [];
       if (command === "get_workspace_settings") return { dataRoot: null, projectRoots: [] };
       if (command === "start_chat") {
@@ -651,6 +664,7 @@ describe("conversation history and reopening", () => {
         return [{ id: "conv-1", title: "Game Architecture", updatedAt: "2026-10-19T10:00:00Z" }];
       }
       if (command === "list_mcp_candidates") return { candidates: [], scannedRoots: [], configsInspected: [], warnings: [] };
+      if (command === "get_mcp_executable_grants") return [];
       if (command === "get_mcp_grants") return [];
       if (command === "get_workspace_settings") return { dataRoot: null, projectRoots: [] };
       if (command === "load_conversation") {

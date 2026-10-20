@@ -246,6 +246,8 @@ export default function McpSettings() {
   return (
     <section className="mcp-settings" aria-labelledby="mcp-settings-title">
       <h2 id="mcp-settings-title">Local Unity MCP</h2>
+      <OfficialUnityRelay />
+      <h3>CoplayDev Unity MCP (HTTP)</h3>
       <p>Discover local endpoints, approve an exact address, then explicitly connect and choose a Unity editor. Discovery checks HTTP availability only.</p>
       <p className="mcp-boundary">Local inspection only. These controls do not expose Unity to chat or AI tools. Project verification comes from the native approved-root check, not an editor name.</p>
       <section className="mcp-session" aria-labelledby="mcp-session-title">
@@ -331,4 +333,175 @@ export default function McpSettings() {
       </>}
     </section>
   );
+}
+type ExecutableGrant = { canonicalPath: string; approvedAt: string };
+type ExecutableResult = { canonicalPath: string; isApproved: boolean; approvedExecutables: ExecutableGrant[] };
+type StdioConnection = { sessionId: string; canonicalPath: string; protocolVersion: string; serverName?: string; serverVersion?: string };
+type StdioInventory = { sessionId: string; tools: { name: string }[]; resources: { name: string }[]; editorBindingStatus: { type: "pendingOrUndocumented"; details: string }; warnings?: string[] };
+
+function OfficialUnityRelay() {
+  const desktop = isTauri();
+  const [path, setPath] = useState("");
+  const [grants, setGrants] = useState<ExecutableGrant[]>([]);
+  const [review, setReview] = useState<{ path: string; revoke: boolean } | null>(null);
+  const [busy, setBusy] = useState("");
+  const [error, setError] = useState("");
+  const [connection, setConnection] = useState<StdioConnection | null>(null);
+  const [inventory, setInventory] = useState<StdioInventory | null>(null);
+  const mounted = useRef(false);
+  const epoch = useRef(0);
+  const locked = useRef(false);
+  const active = useRef<StdioConnection | null>(null);
+  const confirm = useRef<HTMLButtonElement>(null);
+  const absolute = /^(?:[a-zA-Z]:\\|\\\\[^\\]+\\[^\\]+\\|\/)/.test(path.trim());
+
+  useEffect(() => {
+    mounted.current = true;
+    const request = ++epoch.current;
+    if (desktop) {
+      setBusy("Reading saved executable grants...");
+      invoke<ExecutableGrant[]>("get_mcp_executable_grants").then((saved) => {
+        if (request !== epoch.current) { return; }
+        if (!Array.isArray(saved)) { throw new Error("Executable grants could not be read."); }
+        setGrants(saved);
+      }).catch((cause: unknown) => {
+        if (request === epoch.current) { setError(String(cause)); }
+      }).finally(() => {
+        if (request === epoch.current) { setBusy(""); }
+      });
+    }
+    return () => {
+      mounted.current = false;
+      ++epoch.current;
+      const current = active.current;
+      active.current = null;
+      if (current) { void closeSession(current.sessionId).catch(() => {}); }
+    };
+  }, [desktop]);
+  useEffect(() => { if (review) { confirm.current?.focus(); } }, [review]);
+
+  async function disconnect() {
+    ++epoch.current;
+    const current = active.current;
+    active.current = null;
+    setConnection(null);
+    setInventory(null);
+    // Keep an in-flight launch locked until its late result has been closed.
+    if (!current) { return; }
+    locked.current = true;
+    setBusy("Disconnecting relay...");
+    try { await closeSession(current.sessionId); }
+    catch (cause) { if (mounted.current) { setError(`Disconnect failed; local session cleared. ${String(cause)}`); } }
+    finally { locked.current = false; if (mounted.current) { setBusy(""); } }
+  }
+
+  async function changeGrant() {
+    if (!desktop || !review || locked.current) { return; }
+    const action = review;
+    locked.current = true;
+    const request = ++epoch.current;
+    setBusy("Saving executable permission...");
+    setError("");
+    if (action.revoke && active.current?.canonicalPath === action.path) {
+      const current = active.current;
+      active.current = null;
+      setConnection(null);
+      setInventory(null);
+      void closeSession(current.sessionId).catch(() => {});
+    }
+    try {
+      const saved = await invoke<ExecutableResult>(action.revoke ? "revoke_mcp_executable" : "approve_mcp_executable", { path: action.path });
+      if (request !== epoch.current) { return; }
+      if (!Array.isArray(saved.approvedExecutables)) { throw new Error("Invalid executable grant response."); }
+      setGrants(saved.approvedExecutables);
+      setReview(null);
+    } catch (cause) {
+      if (request === epoch.current) { setError(`Permission change failed; saved grants unchanged. ${String(cause)}`); }
+    } finally {
+      locked.current = false;
+      if (mounted.current) { setBusy(""); }
+    }
+  }
+
+  async function connect(executablePath: string) {
+    if (!desktop || locked.current || active.current || review) { return; }
+    locked.current = true;
+    const request = ++epoch.current;
+    setBusy("Starting approved relay; accept Yuki in Unity Pending Connections if prompted...");
+    setError("");
+    setInventory(null);
+    try {
+      const opened = await invoke<StdioConnection>("connect_approved_mcp_stdio", { executablePath });
+      if (request !== epoch.current) { await closeSession(opened.sessionId); return; }
+      active.current = opened;
+      setConnection(opened);
+    } catch (cause) {
+      if (mounted.current) { setError(`Relay connection or cleanup failed. ${String(cause)}`); }
+    } finally {
+      locked.current = false;
+      if (mounted.current) { setBusy(""); }
+    }
+  }
+
+  async function inspect() {
+    const current = active.current;
+    if (!desktop || !current || locked.current || review) { return; }
+    locked.current = true;
+    const request = ++epoch.current;
+    setBusy("Reading bounded capability inventory...");
+    setError("");
+    setInventory(null);
+    try {
+      const found = await invoke<StdioInventory>("list_mcp_stdio_capabilities", { sessionId: current.sessionId });
+      if (request !== epoch.current) { return; }
+      if (found.sessionId !== current.sessionId || !Array.isArray(found.tools) || !Array.isArray(found.resources)) { throw new Error("Invalid relay inventory."); }
+      setInventory(found);
+    } catch (cause) {
+      if (request === epoch.current) {
+        active.current = null;
+        setConnection(null);
+        setError(`Capability inventory failed; local session cleared. Reconnect explicitly. ${String(cause)}`);
+        await closeSession(current.sessionId).catch(() => {});
+      }
+    } finally { locked.current = false; if (mounted.current) { setBusy(""); } }
+  }
+
+  return <section className="mcp-relay" aria-labelledby="mcp-relay-title">
+    <h3 id="mcp-relay-title">Official Unity relay (stdio)</h3>
+    <p>Separate from CoplayDev HTTP. Choose an absolute executable path yourself; Yuki does not search your filesystem for a relay.</p>
+    <label htmlFor="mcp-relay-path">Relay executable absolute path</label>
+    <input id="mcp-relay-path" value={path} placeholder={'C:\\Users\\...\\.unity\\relay\\relay_win.exe'} disabled={!desktop || !!busy || !!review} onChange={(event) => setPath(event.target.value)} spellCheck={false} />
+    <button type="button" disabled={!desktop || !absolute || !!busy || !!review} onClick={() => { setError(""); setReview({ path: path.trim(), revoke: false }); }}>Review executable approval</button>
+    <p className="mcp-session-meta">Launch command is fixed: selected executable + --mcp. No shell or custom arguments. No provider-sharing permission is granted.</p>
+    {!desktop && <p>Browser preview cannot approve or launch a relay.</p>}
+    {busy && <p role="status">{busy}</p>}
+    {error && <div className="mcp-error" role="alert"><p>{error}</p><button type="button" onClick={() => setError("")}>Dismiss relay error</button></div>}
+    {review && <div className="mcp-confirmation" role="group" aria-labelledby="mcp-relay-confirm">
+      <h4 id="mcp-relay-confirm">{review.revoke ? "Revoke executable launch permission?" : "Approve this exact executable?"}</h4>
+      <code>"{review.path}" --mcp</code>
+      <p>{review.revoke ? "Revocation clears sessions for this executable, even if saving fails." : "Approval saves permission only. A separate Connect approved relay action starts this local process with the fixed --mcp argument. Only approve an executable you trust."}</p>
+      <p>Unity may require accepting Yuki under Project Settings &gt; AI &gt; Unity MCP &gt; Pending Connections. This does not verify server identity, bind an editor, or grant provider sharing.</p>
+      <div className="mcp-actions"><button ref={confirm} type="button" disabled={!!busy} onClick={changeGrant}>{review.revoke ? "Confirm executable revoke" : "Confirm executable approval"}</button><button type="button" disabled={!!busy} onClick={() => setReview(null)}>Cancel executable review</button></div>
+    </div>}
+    <h4>Saved executable grants</h4>
+    {!grants.length && <p>No saved relay launch grants.</p>}
+    <ul className="mcp-grants">{grants.map((grant) => <li key={grant.canonicalPath}><code>{grant.canonicalPath}</code><span>Approved {grant.approvedAt}</span><div className="mcp-actions">
+      <button type="button" disabled={!desktop || !!busy || !!connection || !!review} onClick={() => connect(grant.canonicalPath)}>Connect approved relay</button>
+      <button type="button" disabled={!desktop || !!busy || !!review} onClick={() => setReview({ path: grant.canonicalPath, revoke: true })}>Revoke executable grant</button>
+    </div></li>)}</ul>
+    {(connection || busy.startsWith("Starting")) && <button type="button" disabled={!!review || (!!busy && !busy.startsWith("Starting"))} onClick={disconnect}>Disconnect relay</button>}
+    {connection && <div className="mcp-editor-state">
+      <code>{connection.canonicalPath}</code>
+      <p>Server-reported: {connection.serverName || "Name not reported"} / {connection.serverVersion || "Version not reported"}. Protocol {connection.protocolVersion}. Identity unverified.</p>
+      <p>Editor binding pending or undocumented. Accepting Pending Connections does not establish verified project identity here.</p>
+      <button type="button" disabled={!!busy || !!review} onClick={inspect}>Inspect relay capabilities</button>
+    </div>}
+    {inventory && <div className="mcp-relay-inventory">
+      <p>Untrusted server metadata, displayed locally only. Inventory does not authorize tool execution or provider sharing.</p>
+      <p>Tools ({inventory.tools.length})</p><ul>{inventory.tools.map((tool, index) => <li key={index}>{tool.name}</li>)}</ul>
+      <p>Resources ({inventory.resources.length})</p><ul>{inventory.resources.map((resource, index) => <li key={index}>{resource.name}</li>)}</ul>
+      <p>Binding pending or undocumented: {inventory.editorBindingStatus.details}</p>
+      {inventory.warnings?.map((warning, index) => <p className="mcp-warning" key={index}>{warning}</p>)}
+    </div>}
+  </section>;
 }

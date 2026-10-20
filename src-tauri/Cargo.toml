@@ -1,5 +1,6 @@
 [package]
 name = "yuki"
+default-run = "yuki"
 version = "0.1.0"
 description = "Personal AI companion desktop foundation"
 edition = "2024"

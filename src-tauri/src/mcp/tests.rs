@@ -8,13 +8,19 @@ use super::client::{
     send_jsonrpc_post, verify_project_root_locally,
 };
 use super::discovery::{discover_mcp_candidates_core, probe_single_endpoint};
-use super::grants::{approve_endpoint_impl, get_mcp_grants_impl, revoke_endpoint_impl};
+use super::grants::{
+    approve_endpoint_impl, approve_executable_impl, ensure_executable_is_approved,
+    get_mcp_executable_grants_impl, get_mcp_grants_impl, revoke_endpoint_impl,
+    revoke_executable_impl, validate_and_canonicalize_executable,
+};
 use super::models::{
     DOCUMENTED_DEFAULT_MCP_ENDPOINT, MAX_ACTIVE_MCP_SESSIONS, MAX_MCP_CONFIG_FILE_SIZE,
-    MAX_MCP_RESPONSE_BYTES, McpIdentityStatus, McpReachability, UnityProjectVerificationStatus,
+    MAX_MCP_RESPONSE_BYTES, McpEditorBindingStatus, McpIdentityStatus, McpReachability,
+    UnityProjectVerificationStatus,
 };
 use super::protocol::{SseEvent, extract_jsonrpc_from_sse, parse_sse_frames};
 use super::session::{McpSession, McpSessionManager};
+use super::stdio::{connect_approved_mcp_stdio_core, list_stdio_capabilities_core};
 use super::url::validate_and_canonicalize_loopback_url;
 use crate::workspace::models::WorkspaceSettings;
 use crate::workspace::settings::save_settings_atomic;
@@ -1465,4 +1471,393 @@ fn test_parse_unity_instances_formats() {
     // Invalid format (no hash)
     let raw_invalid = serde_json::json!(["InvalidPlainName"]);
     assert!(parse_unity_instances(&raw_invalid).is_err());
+}
+
+fn get_mock_relay_path() -> PathBuf {
+    if let Ok(path) = std::env::var("CARGO_BIN_EXE_mock_unity_relay") {
+        let p = PathBuf::from(path);
+        if p.exists() {
+            return dunce::canonicalize(p).unwrap();
+        }
+    }
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let mut exe = manifest_dir
+        .join("target")
+        .join("debug")
+        .join("mock_unity_relay");
+    if cfg!(windows) {
+        exe.set_extension("exe");
+    }
+    if exe.exists() {
+        return dunce::canonicalize(exe).unwrap();
+    }
+    if let Ok(cur) = std::env::current_exe() {
+        if let Some(parent) = cur.parent() {
+            let mut candidate = parent.join("mock_unity_relay");
+            if cfg!(windows) {
+                candidate.set_extension("exe");
+            }
+            if candidate.exists() {
+                return dunce::canonicalize(candidate).unwrap();
+            }
+            if let Some(grandparent) = parent.parent() {
+                let mut candidate2 = grandparent.join("mock_unity_relay");
+                if cfg!(windows) {
+                    candidate2.set_extension("exe");
+                }
+                if candidate2.exists() {
+                    return dunce::canonicalize(candidate2).unwrap();
+                }
+            }
+        }
+    }
+    panic!("mock_unity_relay binary not found");
+}
+
+#[tokio::test]
+async fn test_endpoint_404_distinguished_from_session_404() {
+    let env = TestEnv::new("test_404_distinction");
+    let cfg = env.config_dir();
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let url = format!("http://127.0.0.1:{port}/mcp");
+    approve_endpoint_impl(&cfg, &url).unwrap();
+
+    tokio::spawn(async move {
+        while let Ok((mut socket, _)) = listener.accept().await {
+            let (_, _) = read_mock_http_request(&mut socket).await;
+            send_mock_http_response(&mut socket, "404 Not Found", "text/plain", "Not Found", &[])
+                .await;
+        }
+    });
+
+    let session_mgr = McpSessionManager::new();
+
+    // 1. Initial connect attempt without session header must yield ENDPOINT_404
+    let init_res = connect_approved_mcp_endpoint_core(&cfg, &session_mgr, &url).await;
+    assert!(init_res.is_err());
+    let init_err = init_res.err().unwrap();
+    assert!(
+        init_err.contains("ENDPOINT_404:"),
+        "Expected ENDPOINT_404 on initial connection, got: {init_err}"
+    );
+
+    // 2. Request with established session header must yield SESSION_404
+    let session = McpSession::new(
+        "sess-expired-test".to_string(),
+        url.clone(),
+        "2024-11-05".to_string(),
+        Some("established-token".to_string()),
+        None,
+        None,
+    );
+    session_mgr.add_session(session).await.unwrap();
+
+    let call_res =
+        list_connected_unity_instances_core(&cfg, &session_mgr, "sess-expired-test").await;
+    assert!(call_res.is_err());
+    let call_err = call_res.err().unwrap();
+    assert!(
+        call_err.contains("SESSION_404:"),
+        "Expected SESSION_404 with established session header, got: {call_err}"
+    );
+}
+
+#[tokio::test]
+async fn test_stdio_no_launch_without_grant() {
+    let env = TestEnv::new("test_no_grant");
+    let cfg = env.config_dir();
+    let exe = get_mock_relay_path();
+    let session_mgr = McpSessionManager::new();
+
+    // Attempting to connect without approval must fail
+    let res = connect_approved_mcp_stdio_core(&cfg, &session_mgr, &exe.to_string_lossy()).await;
+    assert!(res.is_err());
+    let err = res.err().unwrap();
+    assert!(
+        err.contains("not approved"),
+        "Expected approval error, got: {err}"
+    );
+    assert_eq!(session_mgr.total_active_count().await, 0);
+}
+
+#[test]
+fn test_executable_path_validation() {
+    let env = TestEnv::new("test_path_val");
+    let cfg = env.config_dir();
+    let exe = get_mock_relay_path();
+
+    // Relative path must be rejected
+    let rel_err = validate_and_canonicalize_executable("relative/path/relay.exe").unwrap_err();
+    assert!(rel_err.contains("must be an absolute path"));
+
+    // Non-existent path must be rejected
+    let fake_path = env.root.join("does_not_exist_at_all.exe");
+    let fake_err = validate_and_canonicalize_executable(&fake_path.to_string_lossy()).unwrap_err();
+    assert!(fake_err.contains("does not exist"));
+
+    // Non-executable / non-normal file (directory) must be rejected
+    let dir_err = validate_and_canonicalize_executable(&env.root.to_string_lossy()).unwrap_err();
+    assert!(dir_err.contains("not a regular file"));
+
+    // Approve valid executable
+    let grant_res = approve_executable_impl(&cfg, &exe.to_string_lossy()).unwrap();
+    assert!(grant_res.is_approved);
+    assert_eq!(grant_res.approved_executables.len(), 1);
+
+    let all_grants = get_mcp_executable_grants_impl(&cfg).unwrap();
+    assert_eq!(all_grants.len(), 1);
+    assert_eq!(all_grants[0].canonical_path, exe.to_string_lossy());
+
+    // Ensure it passes approval check
+    assert!(ensure_executable_is_approved(&cfg, &exe.to_string_lossy()).is_ok());
+
+    // Revoke executable
+    let revoke_res = revoke_executable_impl(&cfg, &exe.to_string_lossy()).unwrap();
+    assert!(!revoke_res.is_approved);
+    assert!(revoke_res.approved_executables.is_empty());
+    assert!(ensure_executable_is_approved(&cfg, &exe.to_string_lossy()).is_err());
+}
+
+#[tokio::test]
+async fn test_stdio_connect_and_capabilities_success() {
+    let env = TestEnv::new("test_stdio_success");
+    let cfg = env.config_dir();
+    let exe = get_mock_relay_path();
+    let session_mgr = McpSessionManager::new();
+
+    approve_executable_impl(&cfg, &exe.to_string_lossy()).unwrap();
+
+    let conn_res = connect_approved_mcp_stdio_core(&cfg, &session_mgr, &exe.to_string_lossy())
+        .await
+        .unwrap();
+
+    assert_eq!(conn_res.transport, "stdio");
+    assert_eq!(conn_res.protocol_version, "2024-11-05");
+    assert_eq!(
+        conn_res.server_name.as_deref(),
+        Some("Unity AI Assistant Relay")
+    );
+    assert_ne!(conn_res.process_id, 0);
+    assert_eq!(session_mgr.total_active_count().await, 1);
+
+    // List capabilities
+    let caps = list_stdio_capabilities_core(&cfg, &session_mgr, &conn_res.session_id)
+        .await
+        .unwrap();
+
+    assert_eq!(caps.tools.len(), 2);
+    assert_eq!(caps.tools[0].name, "unity_get_scene");
+    assert_eq!(caps.tools[1].name, "unity_refresh");
+    assert_eq!(caps.resources.len(), 1);
+    assert_eq!(caps.resources[0].uri, "unity://scene/hierarchy");
+    assert!(matches!(
+        caps.editor_binding_status,
+        McpEditorBindingStatus::PendingOrUndocumented { .. }
+    ));
+
+    // Disconnect session
+    let disconn = disconnect_session_core(&session_mgr, &conn_res.session_id).await;
+    assert!(disconn.success);
+    assert_eq!(session_mgr.total_active_count().await, 0);
+}
+
+#[test]
+fn test_stdio_fixed_args_enforced() {
+    let exe = get_mock_relay_path();
+
+    // Calling the mock relay directly without --mcp must exit with failure code 2
+    let status = std::process::Command::new(&exe)
+        .status()
+        .expect("Failed to execute mock relay directly");
+    assert!(!status.success());
+    assert_eq!(status.code(), Some(2));
+}
+
+#[tokio::test]
+async fn test_stdio_framing_malformed_json() {
+    let env = TestEnv::new("test_malformed");
+    let cfg = env.config_dir();
+    let exe = get_mock_relay_path();
+    let malformed_exe = env.root.join("mock_relay_malformed.exe");
+    std::fs::copy(&exe, &malformed_exe).unwrap();
+
+    approve_executable_impl(&cfg, &malformed_exe.to_string_lossy()).unwrap();
+    let session_mgr = McpSessionManager::new();
+
+    let res =
+        connect_approved_mcp_stdio_core(&cfg, &session_mgr, &malformed_exe.to_string_lossy()).await;
+    assert!(res.is_err());
+    let err = res.err().unwrap();
+    assert!(
+        err.contains("Invalid JSON in MCP stdio response"),
+        "Expected malformed json error, got: {err}"
+    );
+    assert_eq!(session_mgr.total_active_count().await, 0);
+}
+
+#[tokio::test]
+async fn test_stdio_framing_oversize_response() {
+    let env = TestEnv::new("test_oversize");
+    let cfg = env.config_dir();
+    let exe = get_mock_relay_path();
+    let oversize_exe = env.root.join("mock_relay_oversize.exe");
+    std::fs::copy(&exe, &oversize_exe).unwrap();
+
+    approve_executable_impl(&cfg, &oversize_exe.to_string_lossy()).unwrap();
+    let session_mgr = McpSessionManager::new();
+
+    let res =
+        connect_approved_mcp_stdio_core(&cfg, &session_mgr, &oversize_exe.to_string_lossy()).await;
+    assert!(res.is_err());
+    let err = res.err().unwrap();
+    assert!(
+        err.contains("exceeded limit of 1048576 bytes"),
+        "Expected oversize limit error, got: {err}"
+    );
+    assert_eq!(session_mgr.total_active_count().await, 0);
+}
+
+#[tokio::test]
+async fn test_stdio_framing_mismatched_id() {
+    let env = TestEnv::new("test_mismatched_id");
+    let cfg = env.config_dir();
+    let exe = get_mock_relay_path();
+    let mismatched_exe = env.root.join("mock_relay_mismatched_id.exe");
+    std::fs::copy(&exe, &mismatched_exe).unwrap();
+
+    approve_executable_impl(&cfg, &mismatched_exe.to_string_lossy()).unwrap();
+    let session_mgr = McpSessionManager::new();
+
+    let res =
+        connect_approved_mcp_stdio_core(&cfg, &session_mgr, &mismatched_exe.to_string_lossy())
+            .await;
+    assert!(res.is_err());
+    let err = res.err().unwrap();
+    assert!(
+        err.contains("Mismatched JSON-RPC response ID"),
+        "Expected mismatched ID error, got: {err}"
+    );
+    assert_eq!(session_mgr.total_active_count().await, 0);
+}
+
+#[tokio::test]
+async fn test_stdio_unsupported_version() {
+    let env = TestEnv::new("test_unsupported_ver");
+    let cfg = env.config_dir();
+    let exe = get_mock_relay_path();
+    let bad_ver_exe = env.root.join("mock_relay_unsupported_version.exe");
+    std::fs::copy(&exe, &bad_ver_exe).unwrap();
+
+    approve_executable_impl(&cfg, &bad_ver_exe.to_string_lossy()).unwrap();
+    let session_mgr = McpSessionManager::new();
+
+    let res =
+        connect_approved_mcp_stdio_core(&cfg, &session_mgr, &bad_ver_exe.to_string_lossy()).await;
+    assert!(res.is_err());
+    let err = res.err().unwrap();
+    assert!(
+        err.contains("Unsupported MCP protocol version"),
+        "Expected unsupported version error, got: {err}"
+    );
+    assert_eq!(session_mgr.total_active_count().await, 0);
+}
+
+#[tokio::test]
+async fn test_stdio_child_exit_handling() {
+    let env = TestEnv::new("test_child_exit");
+    let cfg = env.config_dir();
+    let exe = get_mock_relay_path();
+    let exit_exe = env.root.join("mock_relay_exit.exe");
+    std::fs::copy(&exe, &exit_exe).unwrap();
+
+    approve_executable_impl(&cfg, &exit_exe.to_string_lossy()).unwrap();
+    let session_mgr = McpSessionManager::new();
+
+    let res =
+        connect_approved_mcp_stdio_core(&cfg, &session_mgr, &exit_exe.to_string_lossy()).await;
+    assert!(res.is_err());
+    let err = res.err().unwrap();
+    assert!(
+        err.contains("exited or closed stdout"),
+        "Expected exit error, got: {err}"
+    );
+    assert_eq!(session_mgr.total_active_count().await, 0);
+}
+
+#[tokio::test]
+async fn test_stdio_timeout_handling() {
+    let env = TestEnv::new("test_timeout");
+    let cfg = env.config_dir();
+    let exe = get_mock_relay_path();
+    let hang_exe = env.root.join("mock_relay_hang.exe");
+    std::fs::copy(&exe, &hang_exe).unwrap();
+
+    approve_executable_impl(&cfg, &hang_exe.to_string_lossy()).unwrap();
+    let session_mgr = McpSessionManager::new();
+
+    let res =
+        connect_approved_mcp_stdio_core(&cfg, &session_mgr, &hang_exe.to_string_lossy()).await;
+    assert!(res.is_err());
+    let err = res.err().unwrap();
+    assert!(
+        err.contains("timed out"),
+        "Expected timeout error, got: {err}"
+    );
+    assert_eq!(session_mgr.total_active_count().await, 0);
+}
+
+#[tokio::test]
+async fn test_stdio_revocation_cleans_up_process_and_sessions() {
+    let env = TestEnv::new("test_revocation");
+    let cfg = env.config_dir();
+    let exe = get_mock_relay_path();
+    let session_mgr = McpSessionManager::new();
+
+    approve_executable_impl(&cfg, &exe.to_string_lossy()).unwrap();
+
+    let conn_res = connect_approved_mcp_stdio_core(&cfg, &session_mgr, &exe.to_string_lossy())
+        .await
+        .unwrap();
+
+    assert_eq!(session_mgr.total_active_count().await, 1);
+
+    // Invalidate sessions for this executable (as performed by revoke_mcp_executable command)
+    session_mgr
+        .invalidate_executable_sessions(&conn_res.canonical_path)
+        .await;
+
+    assert_eq!(session_mgr.total_active_count().await, 0);
+    assert!(
+        list_stdio_capabilities_core(&cfg, &session_mgr, &conn_res.session_id)
+            .await
+            .is_err()
+    );
+
+    // Revoke from settings
+    let revoke_res = revoke_executable_impl(&cfg, &exe.to_string_lossy()).unwrap();
+    assert!(!revoke_res.is_approved);
+    assert!(revoke_res.approved_executables.is_empty());
+}
+
+#[test]
+fn test_legacy_settings_deserialization_without_approved_executables() {
+    let legacy_json = r#"{
+        "theme": "dark",
+        "approvedMcpEndpoints": [
+            {
+                "canonicalUrl": "http://localhost:8080/mcp",
+                "approvedAt": "2024-11-05T00:00:00Z"
+            }
+        ]
+    }"#;
+
+    let settings: WorkspaceSettings = serde_json::from_str(legacy_json).unwrap();
+    assert_eq!(settings.approved_mcp_endpoints.len(), 1);
+    assert_eq!(
+        settings.approved_mcp_endpoints[0].canonical_url,
+        "http://localhost:8080/mcp"
+    );
+    assert!(settings.approved_mcp_executables.is_empty());
 }
