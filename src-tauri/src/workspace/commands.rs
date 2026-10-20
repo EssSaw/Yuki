@@ -1,7 +1,15 @@
 use tauri::{AppHandle, Manager};
 
+use super::agent::{
+    approve_agent_write_root_impl, create_agent_command_template_impl,
+    get_agent_permission_snapshot_impl, revoke_agent_command_template_impl,
+    revoke_agent_write_root_impl,
+};
 use super::explorer::list_project_directory_impl;
-use super::models::{FileChunk, ProjectEntry, WorkspaceSettings};
+use super::models::{
+    AgentCommandTemplateResult, AgentPermissionSnapshot, AgentRevokeResult, AgentWriteRootResult,
+    FileChunk, ProjectEntry, WorkspaceSettings,
+};
 use super::reader::read_local_file_chunk_impl;
 use super::settings::{
     add_project_root_path, choose_data_root_path, get_workspace_settings_impl,
@@ -88,4 +96,83 @@ pub fn read_local_file_chunk(
 ) -> Result<FileChunk, String> {
     let config_dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
     read_local_file_chunk_impl(&config_dir, &path, offset, chunk_size)
+}
+
+#[tauri::command]
+pub fn get_agent_permission_snapshot(
+    app: AppHandle,
+    project_root: Option<String>,
+    conversation_id: Option<String>,
+) -> Result<AgentPermissionSnapshot, String> {
+    let config_dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
+    get_agent_permission_snapshot_impl(
+        &config_dir,
+        project_root.as_deref(),
+        conversation_id.as_deref(),
+    )
+}
+
+#[tauri::command]
+pub fn approve_agent_write_root(
+    app: AppHandle,
+    project_root: String,
+    path: String,
+    expected_generation: Option<u64>,
+) -> Result<AgentWriteRootResult, String> {
+    let config_dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
+    approve_agent_write_root_impl(&config_dir, &project_root, &path, expected_generation)
+}
+
+#[tauri::command]
+pub fn revoke_agent_write_root(
+    app: AppHandle,
+    grant_id: String,
+    project_root: Option<String>,
+    expected_generation: Option<u64>,
+) -> Result<AgentRevokeResult, String> {
+    let config_dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
+    revoke_agent_write_root_impl(
+        &config_dir,
+        &grant_id,
+        project_root.as_deref(),
+        expected_generation,
+    )
+}
+
+#[tauri::command]
+pub fn create_agent_command_template(
+    app: AppHandle,
+    project_root: String,
+    executable: String,
+    args: Vec<String>,
+    working_dir: String,
+    script_path: Option<String>,
+    expected_generation: Option<u64>,
+) -> Result<AgentCommandTemplateResult, String> {
+    let config_dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
+    create_agent_command_template_impl(
+        &config_dir,
+        &project_root,
+        &executable,
+        args,
+        &working_dir,
+        script_path,
+        expected_generation,
+    )
+}
+
+#[tauri::command]
+pub fn revoke_agent_command_template(
+    app: AppHandle,
+    grant_id: String,
+    project_root: Option<String>,
+    expected_generation: Option<u64>,
+) -> Result<AgentRevokeResult, String> {
+    let config_dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
+    revoke_agent_command_template_impl(
+        &config_dir,
+        &grant_id,
+        project_root.as_deref(),
+        expected_generation,
+    )
 }

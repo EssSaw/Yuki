@@ -12,6 +12,9 @@ use super::url::validate_and_canonicalize_loopback_url;
 /// Persists the grant in app config settings (separate from provider sharing).
 pub fn approve_endpoint_impl(config_dir: &Path, endpoint: &str) -> Result<McpGrantResult, String> {
     let canonical = validate_and_canonicalize_loopback_url(endpoint)?;
+    let _guard = crate::workspace::settings::SETTINGS_MUTATION_LOCK
+        .lock()
+        .map_err(|e| format!("Failed to acquire settings mutation lock: {e}"))?;
     let mut settings = load_settings(config_dir)?;
 
     let is_already_approved = settings
@@ -39,6 +42,9 @@ pub fn approve_endpoint_impl(config_dir: &Path, endpoint: &str) -> Result<McpGra
 /// Removes the grant from app config settings.
 pub fn revoke_endpoint_impl(config_dir: &Path, endpoint: &str) -> Result<McpGrantResult, String> {
     let canonical = validate_and_canonicalize_loopback_url(endpoint)?;
+    let _guard = crate::workspace::settings::SETTINGS_MUTATION_LOCK
+        .lock()
+        .map_err(|e| format!("Failed to acquire settings mutation lock: {e}"))?;
     let mut settings = load_settings(config_dir)?;
 
     let was_present = settings
@@ -152,6 +158,9 @@ pub fn approve_executable_impl(
 ) -> Result<McpExecutableGrantResult, String> {
     let canonical = validate_and_canonicalize_executable(path_str)?;
     let canonical_str = canonical.to_string_lossy().to_string();
+    let _guard = crate::workspace::settings::SETTINGS_MUTATION_LOCK
+        .lock()
+        .map_err(|e| format!("Failed to acquire settings mutation lock: {e}"))?;
     let mut settings = load_settings(config_dir)?;
 
     let is_already_approved = settings
@@ -187,6 +196,9 @@ pub fn revoke_executable_impl(
         path_str.trim().to_string()
     };
 
+    let _guard = crate::workspace::settings::SETTINGS_MUTATION_LOCK
+        .lock()
+        .map_err(|e| format!("Failed to acquire settings mutation lock: {e}"))?;
     let mut settings = load_settings(config_dir)?;
 
     let was_present = settings

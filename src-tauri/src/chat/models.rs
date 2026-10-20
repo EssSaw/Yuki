@@ -39,6 +39,14 @@ pub enum MessageStatus {
     Failed,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum ConversationMode {
+    #[default]
+    Chat,
+    Agent,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ChatMessage {
@@ -54,9 +62,15 @@ pub struct ConversationSummary {
     pub id: String,
     pub title: String,
     pub updated_at: String,
+    #[serde(default)]
+    pub mode: ConversationMode,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_root: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_description: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct ConversationDetail {
     pub id: String,
@@ -64,6 +78,31 @@ pub struct ConversationDetail {
     pub updated_at: String,
     #[serde(default)]
     pub messages: Vec<ChatMessage>,
+    #[serde(default)]
+    pub mode: ConversationMode,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_root: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_description: Option<String>,
+}
+
+impl ConversationDetail {
+    pub fn new(
+        id: impl Into<String>,
+        title: impl Into<String>,
+        updated_at: impl Into<String>,
+        messages: Vec<ChatMessage>,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            title: title.into(),
+            updated_at: updated_at.into(),
+            messages,
+            mode: ConversationMode::Chat,
+            task_root: None,
+            task_description: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

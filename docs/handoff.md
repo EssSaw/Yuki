@@ -1,5 +1,45 @@
 # Current handoff
 
+## Agent foundation integration (2026-10-20)
+
+Completed retained native work directly after Coding provider routing failed, per user
+approval. Added explicit Chat/Agent conversation metadata, task scope, effective native
+grant snapshots, generation-required write-root review/revocation and preparatory command
+records; no execution tools added. Hard UI integrated consistent chat/task/grant controls.
+Provider sharing remains separate. Command-template creation UI is not available in this
+slice. Parent tightened missing-generation rejection, ancestor-link validation and snapshot
+conversation UUID validation; added grant lifecycle/reapproval/sharing-independence tests.
+Validation: 160 existing native tests plus 2 added targeted Agent tests passed; all 102
+frontend tests, frontend production and Windows native release builds passed. Manual
+mode/persistence/grant UI acceptance remains pending. See architecture/agent-mode.md.
+Next approved stage is recoverable text-file edits, not arbitrary command/Unity execution.
+
+
+## Approved Agent design and active research (2026-10-20)
+
+User confirmed staged Agent permissions after grilling; authoritative decisions are in
+[product scope](product/scope.md#approved-staged-agent-capabilities-2026-10-20).
+Start grants/mode/visible task scope only, then recoverable text edits, reviewed commands,
+verified Unity reads/edits. Powerful tools are not enabled in first slice. Explicit exact
+approval remains for arbitrary code/custom tools and high-impact operations. UI must
+stay consistent with accepted visual system; no new competing design language.
+Research agent is recommending minimal native grant/task contracts before Coding and
+Hard UI implementation. Official Unity read integration remains blocked on verified
+schemas/project routing; successful relay connection is not tool authorization.
+
+
+## Live official relay acceptance and next slice (2026-10-20)
+
+User confirmed official stdio connection works; screenshot shows Yuki/yuki.exe Accepted
+in Unity Connected Clients. This verifies live connection acceptance, not project identity,
+read-only tool behavior or provider sharing. Published adapter commit: 83bbee7.
+User approved next slice: verify official connected project/editor, then narrowly reviewed
+read-only editor/scene inspection in chat under separate project-sharing grants. Research
+model is establishing official tool/resource schemas and side effects before implementation;
+CoplayDev allowlist must not be reused. No new live inspection/launch authorization is
+inferred; fixture-only development restriction remains unless user grants otherwise.
+
+
 ## Official Unity relay integration (2026-10-20)
 
 User initial HTTP connection failed with SESSION_404; supplied relay metadata identifies

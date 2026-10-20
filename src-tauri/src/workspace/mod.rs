@@ -1,3 +1,4 @@
+pub mod agent;
 pub mod commands;
 pub mod discovery;
 pub mod explorer;

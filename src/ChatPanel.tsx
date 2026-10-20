@@ -3,6 +3,7 @@ import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import "./ChatPanel.css";
 import ModelPicker from "./ModelPicker";
+import AgentControls, { CHAT_CONTEXT, type AgentContext } from "./AgentControls";
 
 export type MessageStatus = "complete" | "cancelled" | "failed";
 
@@ -19,7 +20,7 @@ export type ConversationSummary = {
   updatedAt: string;
 };
 
-export type ConversationDetail = {
+export type ConversationDetail = Partial<AgentContext> & {
   id: string;
   title: string;
   updatedAt: string;
@@ -71,6 +72,10 @@ export default function ChatPanel({ onNavigate }: ChatPanelProps) {
   const [historyOpen, setHistoryOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<ConversationSummary | null>(null);
   const [deleting, setDeleting] = useState(false);
+  const [agentContext, setAgentContext] = useState<AgentContext>(CHAT_CONTEXT);
+  const [agentReset, setAgentReset] = useState(0);
+  const [agentBusy, setAgentBusy] = useState(false);
+  const navigationRef = useRef(0);
   const [toolActivities, setToolActivities] = useState<DisplayToolActivity[]>([]);
 
   function stopToolActivities() {
@@ -86,7 +91,7 @@ export default function ChatPanel({ onNavigate }: ChatPanelProps) {
       await invoke("delete_conversation", { id: deleteTarget.id });
       setConversations((items) => items.filter((item) => item.id !== deleteTarget.id));
       setToolActivities([]);
-      if (activeConversationId === deleteTarget.id) { setActiveConversationId(null); setMessages([]); }
+      if (activeConversationId === deleteTarget.id) { setActiveConversationId(null); setMessages([]); setAgentContext(CHAT_CONTEXT); setAgentReset((value) => value + 1); ++navigationRef.current; }
       setDeleteTarget(null);
     } catch (reason) { setError(String(reason)); }
     finally { setDeleting(false); }
@@ -156,7 +161,8 @@ export default function ChatPanel({ onNavigate }: ChatPanelProps) {
   }
 
   async function reopenConversation(id: string) {
-    if (id === activeConversationId) return;
+    if (id === activeConversationId || agentBusy || isStreaming) return;
+    const navigation = ++navigationRef.current;
     setToolActivities([]);
 
     if (activeRequestIdRef.current) {
@@ -178,14 +184,21 @@ export default function ChatPanel({ onNavigate }: ChatPanelProps) {
 
     try {
       const detail = await invoke<ConversationDetail>("load_conversation", { id });
+      if (navigation !== navigationRef.current) return;
+      setAgentContext({ mode: detail.mode ?? "chat", taskRoot: detail.taskRoot, taskDescription: detail.taskDescription });
       setActiveConversationId(detail.id);
       setMessages(detail.messages || []);
     } catch (err) {
+      if (navigation !== navigationRef.current) return;
       setError(`Failed to load conversation: ${String(err)}`);
     }
   }
 
   async function handleNewChat() {
+    if (agentBusy) return;
+    ++navigationRef.current;
+    setAgentContext(CHAT_CONTEXT);
+    setAgentReset((value) => value + 1);
     setToolActivities([]);
     if (activeRequestIdRef.current) {
       try {
@@ -209,8 +222,9 @@ export default function ChatPanel({ onNavigate }: ChatPanelProps) {
 
   async function handleSend(overrideContent?: string) {
     const textToSend = (overrideContent ?? input).trim();
-    if (!textToSend || isStreaming || deleting || modelBusy || !settings?.model || !desktop) return;
+    if (!textToSend || isStreaming || deleting || modelBusy || agentBusy || !settings?.model || !desktop) return;
 
+    ++navigationRef.current;
     const requestId = crypto.randomUUID();
     activeRequestIdRef.current = requestId;
     setToolActivities([]);
@@ -315,6 +329,9 @@ export default function ChatPanel({ onNavigate }: ChatPanelProps) {
         conversationId: activeConversationId,
         content: textToSend,
         requestId,
+        mode: agentContext.mode,
+        taskRoot: agentContext.taskRoot ?? null,
+        taskDescription: agentContext.taskDescription ?? null,
       });
 
       if (res?.conversationId && activeRequestIdRef.current === requestId) {
@@ -382,11 +399,12 @@ export default function ChatPanel({ onNavigate }: ChatPanelProps) {
           <button type="button" onClick={() => setHistoryOpen(!historyOpen)} aria-expanded={historyOpen}>
             Conversations <span>{conversations.length}</span>
           </button>
-          <button type="button" className="new-chat-btn" onClick={handleNewChat} disabled={!desktop || isStreaming || deleting}>
+          <button type="button" className="new-chat-btn" onClick={handleNewChat} disabled={!desktop || isStreaming || deleting || agentBusy}>
             + New chat
           </button>
         </div>
       </div>
+      <AgentControls key={agentReset} desktop={desktop} disabled={isStreaming || deleting || modelBusy} conversationId={activeConversationId} value={agentContext} onChange={setAgentContext} onBusy={setAgentBusy} />
       {historyOpen && (
         <section className="conversation-drawer" aria-label="Recent conversations">
           <div className="conversation-drawer-heading">
@@ -399,7 +417,7 @@ export default function ChatPanel({ onNavigate }: ChatPanelProps) {
               <button
                 type="button"
                 aria-pressed={conversation.id === activeConversationId}
-                disabled={isStreaming || deleting}
+                disabled={isStreaming || deleting || agentBusy}
                 onClick={() => { void reopenConversation(conversation.id); setHistoryOpen(false); }}
               >
                 {conversation.title || "Untitled conversation"}
@@ -408,7 +426,7 @@ export default function ChatPanel({ onNavigate }: ChatPanelProps) {
                 type="button"
                 className="conversation-delete"
                 aria-label={`Delete conversation: ${conversation.title || "Untitled conversation"}`}
-                disabled={isStreaming || deleting}
+                disabled={isStreaming || deleting || agentBusy}
                 onClick={() => setDeleteTarget(conversation)}
               >
                 Delete
@@ -572,7 +590,7 @@ export default function ChatPanel({ onNavigate }: ChatPanelProps) {
               onClick={() => void handleSend()}
               aria-label="Send message"
               className="send-button"
-              disabled={!desktop || deleting || isStreaming || modelBusy || !input.trim() || !settings?.model}
+              disabled={!desktop || deleting || isStreaming || modelBusy || agentBusy || !input.trim() || !settings?.model}
             >
               <span className="send-icon" aria-hidden="true">
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">

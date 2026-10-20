@@ -151,6 +151,9 @@ pub fn list_conversations_from_disk(data_root: &Path) -> Result<Vec<Conversation
                     id: conv.id,
                     title: conv.title,
                     updated_at: conv.updated_at,
+                    mode: conv.mode,
+                    task_root: conv.task_root,
+                    task_description: conv.task_description,
                 });
             }
         }

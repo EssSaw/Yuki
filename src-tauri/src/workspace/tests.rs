@@ -2126,3 +2126,38 @@ fn test_search_text_reauthorization_revocation() {
     );
     assert!(res_str.contains("revoked_grant"));
 }
+
+#[test]
+fn agent_grant_lifecycle_and_sharing_independence() {
+    use super::agent::*;
+    let env = TestEnv::new("agent_generation");
+    let cfg = env.config_dir();
+    let project = env.new_dir("project");
+    let root = dunce::canonicalize(&project)
+        .unwrap()
+        .to_string_lossy()
+        .to_string();
+    add_project_root_path(&cfg, &project).unwrap();
+    let generation = load_settings(&cfg).unwrap().grant_generation;
+    assert!(approve_agent_write_root_impl(&cfg, &root, &root, None).is_err());
+    let a = approve_agent_write_root_impl(&cfg, &root, &root, Some(generation)).unwrap();
+    assert!(!a.snapshot.provider_sharing_enabled);
+    assert!(!a.snapshot.execution_available);
+    assert!(
+        revoke_agent_write_root_impl(&cfg, &a.grant.id, Some(&root), Some(generation)).is_err()
+    );
+    let r =
+        revoke_agent_write_root_impl(&cfg, &a.grant.id, Some(&root), Some(a.snapshot.generation))
+            .unwrap();
+    let b = approve_agent_write_root_impl(&cfg, &root, &root, Some(r.snapshot.generation)).unwrap();
+    assert_ne!(a.grant.id, b.grant.id);
+    remove_project_root_impl(&cfg, &root).unwrap();
+    assert!(load_settings(&cfg).unwrap().agent_write_roots.is_empty());
+}
+#[test]
+fn agent_fingerprint_known_vector() {
+    assert_eq!(
+        super::agent::sha256_hex(b"abc"),
+        "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+    );
+}

@@ -380,6 +380,7 @@ fn test_conversation_atomic_persistence_and_listing() {
             content: "Hello from 1".to_string(),
             status: MessageStatus::Complete,
         }],
+        ..Default::default()
     };
 
     let conv2 = ConversationDetail {
@@ -392,6 +393,7 @@ fn test_conversation_atomic_persistence_and_listing() {
             content: "Hello from 2".to_string(),
             status: MessageStatus::Complete,
         }],
+        ..Default::default()
     };
 
     save_conversation_atomic(&data_root, &conv1).unwrap();
@@ -679,6 +681,7 @@ async fn test_execute_chat_stream_full_success() {
         title: "Capital of France".to_string(),
         updated_at: "2026-10-19T10:00:00Z".to_string(),
         messages: vec![user_msg],
+        ..Default::default()
     };
     save_conversation_atomic(&data_root, &initial_conv).unwrap();
 
@@ -780,6 +783,7 @@ async fn test_execute_chat_stream_cancellation_mid_stream() {
         title: "Story".to_string(),
         updated_at: "2026-10-19T10:00:00Z".to_string(),
         messages: vec![user_msg],
+        ..Default::default()
     };
     save_conversation_atomic(&data_root, &initial_conv).unwrap();
 
@@ -892,6 +896,7 @@ async fn test_execute_chat_stream_server_error_sanitization() {
         title: "Error Test".to_string(),
         updated_at: "2026-10-19T10:00:00Z".to_string(),
         messages: vec![user_msg],
+        ..Default::default()
     };
     save_conversation_atomic(&data_root, &initial_conv).unwrap();
 
@@ -977,6 +982,7 @@ async fn test_execute_chat_stream_finish_reason_without_done_succeeds() {
         title: "Capital of France".to_string(),
         updated_at: "2026-10-19T10:00:00Z".to_string(),
         messages: vec![user_msg],
+        ..Default::default()
     };
     save_conversation_atomic(&data_root, &initial_conv).unwrap();
 
@@ -1072,6 +1078,7 @@ async fn test_execute_chat_stream_premature_eof_fails() {
         title: "Hello".to_string(),
         updated_at: "2026-10-19T10:00:00Z".to_string(),
         messages: vec![user_msg],
+        ..Default::default()
     };
     save_conversation_atomic(&data_root, &initial_conv).unwrap();
 
@@ -1162,6 +1169,7 @@ async fn test_execute_chat_stream_finish_reason_with_done_succeeds() {
         title: "Hello".to_string(),
         updated_at: "2026-10-19T10:00:00Z".to_string(),
         messages: vec![user_msg],
+        ..Default::default()
     };
     save_conversation_atomic(&data_root, &initial_conv).unwrap();
 
@@ -1244,6 +1252,7 @@ async fn test_execute_chat_stream_explicit_error_in_stream_fails() {
         title: "Compute".to_string(),
         updated_at: "2026-10-19T10:00:00Z".to_string(),
         messages: vec![user_msg],
+        ..Default::default()
     };
     save_conversation_atomic(&data_root, &initial_conv).unwrap();
 
@@ -1406,6 +1415,7 @@ fn test_delete_conversation_correct_deletion() {
             content: "Please delete me".to_string(),
             status: MessageStatus::Complete,
         }],
+        ..Default::default()
     };
 
     save_conversation_atomic(&data_root, &conv).unwrap();
@@ -1450,6 +1460,7 @@ fn test_delete_conversation_backup_and_temp_cleanup() {
             content: "Recoverable content".to_string(),
             status: MessageStatus::Complete,
         }],
+        ..Default::default()
     };
 
     save_conversation_atomic(&data_root, &conv).unwrap();
@@ -1516,6 +1527,7 @@ fn test_delete_conversation_unrelated_preserved() {
             content: "Hello A".to_string(),
             status: MessageStatus::Complete,
         }],
+        ..Default::default()
     };
 
     let conv_b = ConversationDetail {
@@ -1528,6 +1540,7 @@ fn test_delete_conversation_unrelated_preserved() {
             content: "Hello B".to_string(),
             status: MessageStatus::Complete,
         }],
+        ..Default::default()
     };
 
     save_conversation_atomic(&data_root, &conv_a).unwrap();
@@ -1602,6 +1615,7 @@ fn test_delete_conversation_repeat_deletion_idempotent() {
         title: "Idempotent".to_string(),
         updated_at: "2026-10-19T12:00:00Z".to_string(),
         messages: Vec::new(),
+        ..Default::default()
     };
     save_conversation_atomic(&data_root, &conv).unwrap();
 
@@ -1759,6 +1773,7 @@ fn test_delete_conversation_reports_partial_filesystem_errors() {
         title: "Partial Error Test".to_string(),
         updated_at: "2026-10-19T12:00:00Z".to_string(),
         messages: Vec::new(),
+        ..Default::default()
     };
     save_conversation_atomic(&data_root, &conv).unwrap();
 
@@ -2040,6 +2055,7 @@ async fn test_execute_chat_stream_tool_calling_flow() {
         title: "Tool Test".to_string(),
         updated_at: "2026-10-19T10:00:00Z".to_string(),
         messages: vec![user_msg],
+        ..Default::default()
     };
     save_conversation_atomic(&data_root, &initial_conv).unwrap();
 
@@ -2207,6 +2223,7 @@ async fn test_execute_chat_stream_tool_revocation_before_send() {
         title: "Revoke Test".to_string(),
         updated_at: "2026-10-19T10:00:00Z".to_string(),
         messages: vec![user_msg],
+        ..Default::default()
     };
     save_conversation_atomic(&data_root, &initial_conv).unwrap();
 
@@ -2332,6 +2349,7 @@ async fn test_execute_chat_stream_tool_rounds_budget_exceeded() {
         title: "Budget Test".to_string(),
         updated_at: "2026-10-19T10:00:00Z".to_string(),
         messages: vec![user_msg],
+        ..Default::default()
     };
     save_conversation_atomic(&data_root, &initial_conv).unwrap();
 
@@ -2413,6 +2431,7 @@ async fn test_execute_chat_stream_cancellation_during_tool_round() {
         title: "Cancel Tool".to_string(),
         updated_at: "2026-10-19T10:00:00Z".to_string(),
         messages: vec![user_msg],
+        ..Default::default()
     };
     save_conversation_atomic(&data_root, &initial_conv).unwrap();
 
@@ -2491,6 +2510,7 @@ async fn test_execute_chat_stream_tool_denied_traversal_and_malformed() {
         title: "Denied Tool".to_string(),
         updated_at: "2026-10-19T10:00:00Z".to_string(),
         messages: vec![user_msg],
+        ..Default::default()
     };
     save_conversation_atomic(&data_root, &initial_conv).unwrap();
 
@@ -2887,6 +2907,7 @@ async fn test_execute_chat_stream_graceful_budget_synthesis_and_activity() {
         title: "Synthesis Test".to_string(),
         updated_at: "2026-10-19T10:00:00Z".to_string(),
         messages: vec![user_msg],
+        ..Default::default()
     };
     save_conversation_atomic(&data_root, &initial_conv).unwrap();
 
@@ -3138,6 +3159,7 @@ async fn test_execute_chat_stream_search_tool_flow() {
         title: "Search Test".to_string(),
         updated_at: "2026-10-19T10:00:00Z".to_string(),
         messages: vec![user_msg],
+        ..Default::default()
     };
     save_conversation_atomic(&data_root, &initial_conv).unwrap();
 

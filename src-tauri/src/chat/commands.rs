@@ -14,8 +14,8 @@ use super::history::{
 };
 use super::models::{
     ChatConfig, ChatMessage, ChatSettingsDto, ChatStreamPayload, ConversationDetail,
-    ConversationSummary, MessageRole, MessageStatus, StartChatResponse, ToolActivityPayload,
-    ToolActivityStatus,
+    ConversationMode, ConversationSummary, MessageRole, MessageStatus, StartChatResponse,
+    ToolActivityPayload, ToolActivityStatus,
 };
 use super::parser::{ParsedEvent, SseParser};
 use super::state::ChatState;
@@ -282,12 +282,103 @@ pub async fn delete_conversation(
 }
 
 #[tauri::command]
+pub async fn set_conversation_mode(
+    app: AppHandle,
+    state: State<'_, ChatState>,
+    conversation_id: String,
+    mode: ConversationMode,
+    task_root: Option<String>,
+    task_description: Option<String>,
+) -> Result<ConversationDetail, String> {
+    validate_conversation_id(&conversation_id)?;
+
+    // Block mode/task changes during active generation
+    {
+        let guard = state.inner.active.lock().map_err(|e| e.to_string())?;
+        if let Some(ref req) = *guard {
+            if req.conversation_id == conversation_id {
+                return Err(format!(
+                    "Cannot modify conversation mode or task while a chat request ('{}') is active. Please wait or cancel it before changing mode.",
+                    req.request_id
+                ));
+            }
+        }
+    }
+
+    let config_dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
+    let workspace_settings = crate::workspace::settings::load_settings(&config_dir)?;
+
+    let data_root_str = workspace_settings.data_root.ok_or(
+        "Data root is not configured or unavailable. Please choose a data root in workspace settings first."
+            .to_string(),
+    )?;
+    let data_root = PathBuf::from(data_root_str);
+    if !data_root.exists() {
+        return Err(format!(
+            "Configured data root directory '{}' is unavailable.",
+            data_root.display()
+        ));
+    }
+
+    let (validated_task_root, validated_desc) = match mode {
+        ConversationMode::Agent => {
+            let tr = task_root
+                .as_deref()
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty())
+                .ok_or_else(|| "Agent mode requires an approved project task root.".to_string())?;
+
+            let canon_tr = dunce::canonicalize(tr)
+                .map_err(|e| format!("Cannot inspect task root '{tr}': {e}"))?;
+
+            let is_approved = workspace_settings.project_roots.iter().any(|r| {
+                r == tr
+                    || dunce::canonicalize(r)
+                        .map(|c| c == canon_tr)
+                        .unwrap_or(false)
+            });
+
+            if !is_approved {
+                return Err(format!(
+                    "Task root '{tr}' is not an approved project folder."
+                ));
+            }
+
+            let canon_tr_str = canon_tr.to_string_lossy().to_string();
+            let desc = task_description
+                .as_deref()
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty());
+
+            (Some(canon_tr_str), desc)
+        }
+        ConversationMode::Chat => (None, None),
+    };
+
+    let cid = conversation_id.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut conv = load_conversation_from_disk(&data_root, &cid)?;
+        conv.mode = mode;
+        conv.task_root = validated_task_root;
+        conv.task_description = validated_desc;
+        conv.updated_at = chrono::Utc::now().to_rfc3339();
+        save_conversation_atomic(&data_root, &conv)?;
+        Ok(conv)
+    })
+    .await
+    .map_err(|e| format!("Failed to update conversation mode: {e}"))?
+}
+
+#[tauri::command]
 pub async fn start_chat(
     app: AppHandle,
     state: State<'_, ChatState>,
     conversation_id: Option<String>,
     content: String,
     request_id: String,
+    mode: Option<ConversationMode>,
+    task_root: Option<String>,
+    task_description: Option<String>,
 ) -> Result<StartChatResponse, String> {
     let trimmed_content = content.trim();
     if trimmed_content.is_empty() {
@@ -317,11 +408,11 @@ pub async fn start_chat(
     // 2. Validate workspace data root
     let config_dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
     let workspace_settings = crate::workspace::settings::load_settings(&config_dir)?;
-    let data_root_str = workspace_settings.data_root.ok_or(
+    let data_root_str = workspace_settings.data_root.as_ref().ok_or(
         "Data root is not configured or unavailable. Please choose a data root in workspace settings first."
             .to_string(),
     )?;
-    let data_root = PathBuf::from(data_root_str);
+    let data_root = PathBuf::from(data_root_str.as_str());
     if !data_root.exists() {
         return Err(format!(
             "Configured data root directory '{}' is unavailable.",
@@ -352,17 +443,111 @@ pub async fn start_chat(
     let user_msg_content = trimmed_content.to_string();
     let data_root_clone = data_root.clone();
     let cid_clone = resolved_id.clone();
+    let ws_clone = workspace_settings.clone();
 
     let conv_result = tauri::async_runtime::spawn_blocking(move || {
         let mut conv = if is_new {
+            let effective_mode = mode.unwrap_or(ConversationMode::Chat);
+            let (val_task_root, val_task_desc) = match effective_mode {
+                ConversationMode::Agent => {
+                    let tr = task_root
+                        .as_deref()
+                        .map(|s| s.trim())
+                        .filter(|s| !s.is_empty())
+                        .ok_or_else(|| {
+                            "Agent mode requires an approved project task root.".to_string()
+                        })?;
+                    let canon_tr = dunce::canonicalize(tr)
+                        .map_err(|e| format!("Cannot inspect task root '{tr}': {e}"))?;
+                    let is_approved = ws_clone.project_roots.iter().any(|r| {
+                        r == tr
+                            || dunce::canonicalize(r)
+                                .map(|c| c == canon_tr)
+                                .unwrap_or(false)
+                    });
+                    if !is_approved {
+                        return Err(format!("Task root '{tr}' is not an approved project folder."));
+                    }
+                    (
+                        Some(canon_tr.to_string_lossy().to_string()),
+                        task_description.filter(|s| !s.trim().is_empty()),
+                    )
+                }
+                ConversationMode::Chat => (None, None),
+            };
+
             ConversationDetail {
                 id: cid_clone.clone(),
                 title: generate_conversation_title(&user_msg_content),
                 updated_at: chrono::Utc::now().to_rfc3339(),
                 messages: Vec::new(),
+                mode: effective_mode,
+                task_root: val_task_root,
+                task_description: val_task_desc,
             }
         } else {
-            load_conversation_from_disk(&data_root_clone, &cid_clone)?
+            let mut existing = load_conversation_from_disk(&data_root_clone, &cid_clone)?;
+            if let Some(m) = mode {
+                match m {
+                    ConversationMode::Agent => {
+                        let tr = task_root
+                            .as_deref()
+                            .map(|s| s.trim())
+                            .filter(|s| !s.is_empty())
+                            .or(existing.task_root.as_deref())
+                            .ok_or_else(|| {
+                                "Agent mode requires an approved project task root.".to_string()
+                            })?;
+                        let canon_tr = dunce::canonicalize(tr)
+                            .map_err(|e| format!("Cannot inspect task root '{tr}': {e}"))?;
+                        let is_approved = ws_clone.project_roots.iter().any(|r| {
+                            r == tr
+                                || dunce::canonicalize(r)
+                                .map(|c| c == canon_tr)
+                                .unwrap_or(false)
+                        });
+                        if !is_approved {
+                            return Err(format!(
+                                "Task root '{tr}' is not an approved project folder."
+                            ));
+                        }
+                        existing.mode = ConversationMode::Agent;
+                        existing.task_root = Some(canon_tr.to_string_lossy().to_string());
+                        if let Some(desc) = task_description {
+                            existing.task_description =
+                                Some(desc).filter(|s| !s.trim().is_empty());
+                        }
+                    }
+                    ConversationMode::Chat => {
+                        existing.mode = ConversationMode::Chat;
+                        existing.task_root = None;
+                        existing.task_description = None;
+                    }
+                }
+            }
+
+            // Validate Agent mode task root is still approved and not revoked
+            if existing.mode == ConversationMode::Agent {
+                let tr = existing
+                    .task_root
+                    .as_deref()
+                    .ok_or_else(|| "Agent mode conversation is missing task root.".to_string())?;
+                let canon_tr = dunce::canonicalize(tr).ok();
+                let is_approved = ws_clone.project_roots.iter().any(|r| {
+                    r == tr
+                        || match (dunce::canonicalize(r), canon_tr.as_ref()) {
+                            (Ok(rc), Some(tc)) => &rc == tc,
+                            _ => false,
+                        }
+                });
+                if !is_approved {
+                    return Err(format!(
+                        "Task root '{tr}' is no longer an approved project folder. Task context has been revoked."
+                    ));
+                }
+            }
+
+            existing
         };
 
         let user_msg = ChatMessage {

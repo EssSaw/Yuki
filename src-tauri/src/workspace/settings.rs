@@ -1,8 +1,13 @@
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use super::explorer::validate_project_root;
 use super::models::WorkspaceSettings;
+
+/// Global mutation lock to protect read-modify-write sequences across all workspace
+/// and grant settings writers, preventing lost updates in concurrent operations.
+pub static SETTINGS_MUTATION_LOCK: Mutex<()> = Mutex::new(());
 
 /// Resolves the dedicated "Yuki" subdirectory for a chosen data folder.
 /// Avoids doubling if the selected folder's basename is already "Yuki" (case-insensitive).
@@ -172,6 +177,10 @@ pub fn choose_data_root_path(
     config_dir: &Path,
     picked_folder: &Path,
 ) -> Result<WorkspaceSettings, String> {
+    let _guard = SETTINGS_MUTATION_LOCK
+        .lock()
+        .map_err(|e| format!("Failed to acquire settings mutation lock: {e}"))?;
+
     let parent = dunce::canonicalize(picked_folder)
         .map_err(|e| format!("Cannot inspect selected data folder: {e}"))?;
     if super::explorer::is_system_directory(&parent) {
@@ -235,6 +244,10 @@ pub fn add_project_root_path(
     let canonical = validate_project_root(picked_folder)?;
     let root_str = canonical.to_string_lossy().to_string();
 
+    let _guard = SETTINGS_MUTATION_LOCK
+        .lock()
+        .map_err(|e| format!("Failed to acquire settings mutation lock: {e}"))?;
+
     let mut settings = load_settings(config_dir)?;
 
     let already_present = settings.project_roots.iter().any(|r| {
@@ -260,6 +273,10 @@ pub fn remove_project_root_impl(
     config_dir: &Path,
     root_to_remove: &str,
 ) -> Result<WorkspaceSettings, String> {
+    let _guard = SETTINGS_MUTATION_LOCK
+        .lock()
+        .map_err(|e| format!("Failed to acquire settings mutation lock: {e}"))?;
+
     let mut settings = load_settings(config_dir)?;
 
     let target_canon = dunce::canonicalize(root_to_remove).ok();
@@ -292,6 +309,49 @@ pub fn remove_project_root_impl(
         true
     });
 
+    // Cascade clear dependent write roots
+    settings.agent_write_roots.retain(|w| {
+        if w.project_root == root_to_remove {
+            return false;
+        }
+        if let Some(ref tc) = target_canon {
+            if let Ok(prc) = dunce::canonicalize(&w.project_root) {
+                if &prc == tc {
+                    return false;
+                }
+            }
+            if let Ok(wc) = dunce::canonicalize(&w.canonical_path) {
+                if wc.starts_with(tc) {
+                    return false;
+                }
+            }
+        }
+        true
+    });
+
+    // Cascade clear dependent command templates
+    settings.agent_command_templates.retain(|t| {
+        if t.project_root == root_to_remove {
+            return false;
+        }
+        if let Some(ref tc) = target_canon {
+            if let Ok(prc) = dunce::canonicalize(&t.project_root) {
+                if &prc == tc {
+                    return false;
+                }
+            }
+            if let Ok(wdc) = dunce::canonicalize(&t.working_dir_root) {
+                if wdc.starts_with(tc) {
+                    return false;
+                }
+            }
+        }
+        true
+    });
+
+    // Monotonically increment grant_generation
+    settings.grant_generation = settings.grant_generation.saturating_add(1);
+
     save_settings_atomic(config_dir, &settings)?;
 
     Ok(settings)
@@ -308,6 +368,10 @@ pub fn toggle_project_provider_sharing_impl(
     root: &str,
     enabled: Option<bool>,
 ) -> Result<WorkspaceSettings, String> {
+    let _guard = SETTINGS_MUTATION_LOCK
+        .lock()
+        .map_err(|e| format!("Failed to acquire settings mutation lock: {e}"))?;
+
     let mut settings = load_settings(config_dir)?;
 
     let canonical_root =
