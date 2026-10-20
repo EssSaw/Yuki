@@ -7,6 +7,10 @@ use crate::workspace::explorer::{
     get_shareable_project_roots_impl, list_provider_project_directory_impl,
 };
 use crate::workspace::reader::{authorize_provider_file, read_local_file_chunk_impl};
+use crate::workspace::search::{
+    reauthorize_search_files_result, reauthorize_search_text_result, search_project_files_impl,
+    search_project_text_impl,
+};
 
 pub const MAX_TOOL_ROUNDS: usize = 5;
 pub const MAX_TOOLS_PER_ROUND: usize = 8;
@@ -19,6 +23,8 @@ pub const TOOL_DISCOVER_GAME_PROJECTS: &str = "discover_game_projects";
 pub const TOOL_LIST_SHAREABLE_PROJECTS: &str = "list_shareable_projects";
 pub const TOOL_LIST_PROJECT_DIRECTORY: &str = "list_project_directory";
 pub const TOOL_READ_FILE_CHUNK: &str = "read_file_chunk";
+pub const TOOL_SEARCH_PROJECT_FILES: &str = "search_project_files";
+pub const TOOL_SEARCH_PROJECT_TEXT: &str = "search_project_text";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ToolDefinition {
@@ -118,6 +124,101 @@ pub fn get_chat_tools() -> Vec<ToolDefinition> {
                         }
                     },
                     "required": ["path"],
+                    "additionalProperties": false
+                }),
+            },
+        },
+        ToolDefinition {
+            tool_type: "function".to_string(),
+            function: FunctionDefinition {
+                name: TOOL_SEARCH_PROJECT_FILES.to_string(),
+                description: "Searches for files and directories by filename or relative path pattern across approved, share-enabled project folders. Supports literal substring matching or wildcard glob patterns (* and ?). Returns matching paths, sizes, and bounded coverage metadata.".to_string(),
+                parameters: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "pattern": {
+                            "type": "string",
+                            "description": "Filename or path pattern to search for (e.g. 'PlayerController.cs', '*.cs', 'Assets/Scripts')."
+                        },
+                        "project_root": {
+                            "type": "string",
+                            "description": "Optional approved project root path to search. If omitted, searches across all approved roots that currently have provider sharing enabled."
+                        },
+                        "match_type": {
+                            "type": "string",
+                            "enum": ["literal", "glob"],
+                            "description": "Pattern matching mode: 'literal' for substring matching (default), or 'glob' for wildcard patterns (* and ?)."
+                        },
+                        "case_sensitive": {
+                            "type": "boolean",
+                            "description": "Whether pattern matching should be case-sensitive. Defaults to false."
+                        },
+                        "max_depth": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 8,
+                            "description": "Maximum directory traversal depth (default 4, maximum 8)."
+                        },
+                        "max_results": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 50,
+                            "description": "Maximum number of matching files to return (default 20, maximum 50)."
+                        },
+                        "cursor": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "description": "Optional zero-based result offset for cursor pagination."
+                        }
+                    },
+                    "required": ["pattern"],
+                    "additionalProperties": false
+                }),
+            },
+        },
+        ToolDefinition {
+            tool_type: "function".to_string(),
+            function: FunctionDefinition {
+                name: TOOL_SEARCH_PROJECT_TEXT.to_string(),
+                description: "Searches for literal text content inside files across approved, share-enabled project folders. Streams file contents without full-file size rejection, returning line numbers, byte offsets, short snippets, and bounded coverage metadata. Does not execute arbitrary regex.".to_string(),
+                parameters: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "Exact literal text string to search for in files."
+                        },
+                        "project_root": {
+                            "type": "string",
+                            "description": "Optional approved project root path to search. If omitted, searches across all approved roots that currently have provider sharing enabled."
+                        },
+                        "case_sensitive": {
+                            "type": "boolean",
+                            "description": "Whether search should be case-sensitive. Defaults to false."
+                        },
+                        "file_pattern": {
+                            "type": "string",
+                            "description": "Optional filename pattern filter (e.g. '*.cs', '*.json') to restrict which files are searched."
+                        },
+                        "max_depth": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 8,
+                            "description": "Maximum directory traversal depth (default 4, maximum 8)."
+                        },
+                        "max_results": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 50,
+                            "description": "Maximum number of matches to return (default 20, maximum 50)."
+                        },
+                        "cursor": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "description": "Optional zero-based match offset for cursor pagination."
+                        }
+                    },
+                    "required": ["query"],
                     "additionalProperties": false
                 }),
             },
@@ -319,6 +420,28 @@ pub fn execute_tool(config_dir: &Path, name: &str, arguments_json: &str) -> Stri
                 .unwrap_or_else(|_| "{\"error\":\"File read failed.\"}".to_string()),
             }
         }
+        TOOL_SEARCH_PROJECT_FILES => {
+            match search_project_files_impl(config_dir, arguments_json) {
+                Ok(res) => serde_json::to_string(&res).unwrap_or_else(|_| {
+                    "{\"error\":\"Failed to serialize files search result.\"}".to_string()
+                }),
+                Err(e) => serde_json::to_string(&serde_json::json!({
+                    "error": e
+                }))
+                .unwrap_or_else(|_| "{\"error\":\"File search rejected.\"}".to_string()),
+            }
+        }
+        TOOL_SEARCH_PROJECT_TEXT => {
+            match search_project_text_impl(config_dir, arguments_json) {
+                Ok(res) => serde_json::to_string(&res).unwrap_or_else(|_| {
+                    "{\"error\":\"Failed to serialize text search result.\"}".to_string()
+                }),
+                Err(e) => serde_json::to_string(&serde_json::json!({
+                    "error": e
+                }))
+                .unwrap_or_else(|_| "{\"error\":\"Text search rejected.\"}".to_string()),
+            }
+        }
         other => serde_json::to_string(&serde_json::json!({
             "error": format!("Unknown tool '{other}'. Only read-only project inspection tools are permitted.")
         }))
@@ -378,6 +501,12 @@ pub fn reauthorize_tool_result(
         TOOL_DISCOVER_GAME_PROJECTS => {
             reauthorize_discovery_result(config_dir, result_content);
         }
+        TOOL_SEARCH_PROJECT_FILES => {
+            reauthorize_search_files_result(config_dir, result_content);
+        }
+        TOOL_SEARCH_PROJECT_TEXT => {
+            reauthorize_search_text_result(config_dir, result_content);
+        }
         _ => {}
     }
 }
@@ -390,6 +519,8 @@ pub fn safe_running_summary(tool_name: &str) -> String {
         TOOL_LIST_SHAREABLE_PROJECTS => "Checking shareable project roots".to_string(),
         TOOL_LIST_PROJECT_DIRECTORY => "Inspecting project directory".to_string(),
         TOOL_READ_FILE_CHUNK => "Reading file chunk".to_string(),
+        TOOL_SEARCH_PROJECT_FILES => "Searching project files".to_string(),
+        TOOL_SEARCH_PROJECT_TEXT => "Searching project text".to_string(),
         _ => format!("Executing {tool_name}"),
     }
 }
@@ -477,6 +608,53 @@ pub fn summarize_tool_output(tool_name: &str, output_json: &str) -> (ToolActivit
                     )
                 } else {
                     (ToolActivityStatus::Succeeded, format!("Read {bytes} bytes"))
+                }
+            }
+            TOOL_SEARCH_PROJECT_FILES => {
+                let count = v
+                    .get("matches")
+                    .and_then(|m| m.as_array())
+                    .map(|a| a.len())
+                    .unwrap_or(0);
+                let coverage = v
+                    .get("coverage")
+                    .and_then(|c| c.as_str())
+                    .unwrap_or("complete");
+                if coverage == "partial" {
+                    (
+                        ToolActivityStatus::Succeeded,
+                        format!("Found {count} matching file(s) (partial search)"),
+                    )
+                } else {
+                    (
+                        ToolActivityStatus::Succeeded,
+                        format!("Found {count} matching file(s)"),
+                    )
+                }
+            }
+            TOOL_SEARCH_PROJECT_TEXT => {
+                let count = v
+                    .get("matches")
+                    .and_then(|m| m.as_array())
+                    .map(|a| a.len())
+                    .unwrap_or(0);
+                let files = v.get("filesScanned").and_then(|f| f.as_u64()).unwrap_or(0);
+                let coverage = v
+                    .get("coverage")
+                    .and_then(|c| c.as_str())
+                    .unwrap_or("complete");
+                if coverage == "partial" {
+                    (
+                        ToolActivityStatus::Succeeded,
+                        format!(
+                            "Found {count} text match(es) across {files} file(s) (partial search)"
+                        ),
+                    )
+                } else {
+                    (
+                        ToolActivityStatus::Succeeded,
+                        format!("Found {count} text match(es) across {files} file(s)"),
+                    )
                 }
             }
             _ => (

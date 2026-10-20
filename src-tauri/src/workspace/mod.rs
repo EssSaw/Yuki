@@ -3,6 +3,7 @@ pub mod discovery;
 pub mod explorer;
 pub mod models;
 pub mod reader;
+pub mod search;
 pub mod settings;
 
 #[cfg(test)]

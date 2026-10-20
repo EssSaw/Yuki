@@ -65,6 +65,24 @@ provider-sharing authorization without wiring file contents to remote AI provide
      `AppData`, recycle bins, and drive/user profile roots.
    - Protects Yuki application settings directory (`config_dir`) and active data root (`data_root`).
 
+5. **Bounded search operations (`search_project_files` and `search_project_text`)**:
+   - Operate exclusively on share-enabled approved project roots.
+   - Enforce centralized security policy: rechecks root approval, sharing grant, path containment,
+     and skips symlinks/junctions, build/cache folders (`Library`, `Temp`, `node_modules`, `target`, `bin`, `.git`, etc.),
+     system folders, and credential/secret files on every directory and file inspected.
+   - Non-regex search: filename search uses an iterative wildcard matcher (`*`, `?`) or literal substring;
+     text search uses literal string matching with Unicode-aware case-sensitivity toggles. Arbitrary regex evaluation is forbidden.
+   - Streaming text search: reads files using 32 KiB chunk streaming buffers without arbitrary whole-file size rejection.
+     Carries over boundary-spanning match windows across chunk boundaries without duplicate emissions. Automatically rolls
+     back incomplete multi-byte code point splits at chunk ends.
+   - Bounded context snippets: returns line number, byte offset, and a short snippet (clamped to 200 characters on UTF-8
+     character boundaries around match with `...`), not entire file contents.
+   - Budgeting and truncation: caps directories scanned (1000), files inspected (200), bytes inspected (20 MiB),
+     execution time (5s), and serialized result payload size (60 KiB). Reports explicit coverage metadata (`complete` | `partial`),
+     `limitsReached`, `unscannedRemainder`, `unsupportedBinaryFiles`, and cursor pagination tokens.
+   - Pre-send reauthorization: before any result is transmitted to a provider, active project root sharing grants are rechecked;
+     revoked root entries are purged and flagged with `revoked_grant`.
+
 ## Frontend integration
 
 Projects connects file entries and an explicit absolute local file path to a
@@ -117,3 +135,10 @@ compatibility, directory listing, entry caps, symlink/junction containment, chun
 large file streaming, UTF-8 boundary management, binary/invalid text rejection, sensitive
 file/directory blocking, Windows system directory protection, provider-sharing toggle/revocation,
 and argument validation. All tests compile and pass cleanly without warnings.
+
+Integration clarification: text-search nonzero cursors are currently rejected rather
+than claiming reliable continuation. Narrow the root or file_pattern after partial
+coverage. Filename search retains its match-offset cursor. Actual text inspection is
+bounded to 4 MiB per operation, 200 files and 5 seconds, with per-directory enumeration
+capped at 20,000 entries. An unfinished file scan is explicitly partial; these are
+operation budgets, not a total on-disk file-size prohibition.

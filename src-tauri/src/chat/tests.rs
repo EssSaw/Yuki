@@ -1801,12 +1801,14 @@ fn test_delete_conversation_reports_partial_filesystem_errors() {
 #[test]
 fn test_tool_schema_and_constants() {
     let tools = get_chat_tools();
-    assert_eq!(tools.len(), 4);
+    assert_eq!(tools.len(), 6);
     let names: Vec<&str> = tools.iter().map(|t| t.function.name.as_str()).collect();
     assert!(names.contains(&"discover_game_projects"));
     assert!(names.contains(&"list_shareable_projects"));
     assert!(names.contains(&"list_project_directory"));
     assert!(names.contains(&"read_file_chunk"));
+    assert!(names.contains(&"search_project_files"));
+    assert!(names.contains(&"search_project_text"));
 
     for t in &tools {
         assert_eq!(t.tool_type, "function");
@@ -2673,6 +2675,14 @@ fn test_safe_running_summary_and_summarize_tool_output() {
         "Reading file chunk"
     );
     assert_eq!(
+        safe_running_summary("search_project_files"),
+        "Searching project files"
+    );
+    assert_eq!(
+        safe_running_summary("search_project_text"),
+        "Searching project text"
+    );
+    assert_eq!(
         safe_running_summary("unknown_tool"),
         "Executing unknown_tool"
     );
@@ -2687,6 +2697,51 @@ fn test_safe_running_summary_and_summarize_tool_output() {
     let (status, summary) = summarize_tool_output("discover_game_projects", &disc_success);
     assert_eq!(status, ToolActivityStatus::Succeeded);
     assert_eq!(summary, "Found 2 game project(s)");
+
+    // Search files success
+    let files_success = serde_json::json!({
+        "matches": [{"name": "Player.cs"}, {"name": "Enemy.cs"}],
+        "coverage": "complete"
+    })
+    .to_string();
+    let (status, summary) = summarize_tool_output("search_project_files", &files_success);
+    assert_eq!(status, ToolActivityStatus::Succeeded);
+    assert_eq!(summary, "Found 2 matching file(s)");
+
+    // Search files partial
+    let files_partial = serde_json::json!({
+        "matches": [{"name": "Player.cs"}],
+        "coverage": "partial"
+    })
+    .to_string();
+    let (status, summary) = summarize_tool_output("search_project_files", &files_partial);
+    assert_eq!(status, ToolActivityStatus::Succeeded);
+    assert_eq!(summary, "Found 1 matching file(s) (partial search)");
+
+    // Search text success
+    let text_success = serde_json::json!({
+        "matches": [{"path": "Player.cs", "snippet": "health"}],
+        "filesScanned": 5,
+        "coverage": "complete"
+    })
+    .to_string();
+    let (status, summary) = summarize_tool_output("search_project_text", &text_success);
+    assert_eq!(status, ToolActivityStatus::Succeeded);
+    assert_eq!(summary, "Found 1 text match(es) across 5 file(s)");
+
+    // Search text partial
+    let text_partial = serde_json::json!({
+        "matches": [{"path": "Player.cs", "snippet": "health"}],
+        "filesScanned": 5,
+        "coverage": "partial"
+    })
+    .to_string();
+    let (status, summary) = summarize_tool_output("search_project_text", &text_partial);
+    assert_eq!(status, ToolActivityStatus::Succeeded);
+    assert_eq!(
+        summary,
+        "Found 1 text match(es) across 5 file(s) (partial search)"
+    );
 
     // Discovery structured error
     let disc_err = serde_json::json!({
@@ -2966,6 +3021,247 @@ async fn test_execute_chat_stream_graceful_budget_synthesis_and_activity() {
     assert_eq!(
         loaded.messages[1].content,
         "Found Godot project: Adventure."
+    );
+    assert_eq!(loaded.messages[1].status, MessageStatus::Complete);
+}
+
+#[test]
+fn test_execute_tool_search_project_files_and_text() {
+    let env = TestEnv::new("tool_exec_search");
+    let cfg = env.config_dir();
+    let root = env.new_dir("ToolSearchRoot");
+    let canon_root = dunce::canonicalize(&root)
+        .unwrap()
+        .to_string_lossy()
+        .to_string();
+
+    add_project_root_path(&cfg, &root).unwrap();
+    toggle_project_provider_sharing_impl(&cfg, &canon_root, Some(true)).unwrap();
+
+    let file = root.join("PlayerController.cs");
+    std::fs::write(
+        &file,
+        b"public class PlayerController {\n    int health = 100;\n}\n",
+    )
+    .unwrap();
+
+    // 1. search_project_files
+    let files_args = serde_json::json!({
+        "pattern": "*.cs",
+        "match_type": "glob",
+        "project_root": canon_root
+    })
+    .to_string();
+    let files_out = execute_tool(&cfg, "search_project_files", &files_args);
+    assert!(files_out.contains("PlayerController.cs"));
+    assert!(files_out.contains("\"coverage\":\"complete\""));
+
+    // 2. search_project_text
+    let text_args = serde_json::json!({
+        "query": "health",
+        "project_root": canon_root
+    })
+    .to_string();
+    let text_out = execute_tool(&cfg, "search_project_text", &text_args);
+    assert!(text_out.contains("PlayerController.cs"));
+    assert!(text_out.contains("health = 100"));
+    assert!(text_out.contains("\"lineNumber\":2"));
+}
+
+#[test]
+fn test_reauthorize_tool_result_search() {
+    let env = TestEnv::new("tool_reauth_search");
+    let cfg = env.config_dir();
+    let root = env.new_dir("SearchReauth");
+    let canon_root = dunce::canonicalize(&root)
+        .unwrap()
+        .to_string_lossy()
+        .to_string();
+
+    add_project_root_path(&cfg, &root).unwrap();
+    toggle_project_provider_sharing_impl(&cfg, &canon_root, Some(true)).unwrap();
+
+    let file = root.join("app.rs");
+    std::fs::write(&file, b"fn confidential() {}\n").unwrap();
+
+    let mut files_out = execute_tool(&cfg, "search_project_files", "{\"pattern\":\"app.rs\"}");
+    assert!(files_out.contains("app.rs"));
+
+    let mut text_out = execute_tool(&cfg, "search_project_text", "{\"query\":\"confidential\"}");
+    assert!(text_out.contains("confidential"));
+
+    // Revoke sharing
+    toggle_project_provider_sharing_impl(&cfg, &canon_root, Some(false)).unwrap();
+
+    // Reauthorize before provider send
+    reauthorize_tool_result(&cfg, "search_project_files", "{}", &mut files_out);
+    assert!(files_out.contains("error"));
+    assert!(
+        !files_out.contains("app.rs"),
+        "Must not leak filename when revoked"
+    );
+
+    reauthorize_tool_result(&cfg, "search_project_text", "{}", &mut text_out);
+    assert!(text_out.contains("error"));
+    assert!(
+        !text_out.contains("confidential"),
+        "Must not leak text snippet when revoked"
+    );
+}
+
+#[tokio::test]
+async fn test_execute_chat_stream_search_tool_flow() {
+    let env = TestEnv::new("stream_search_flow");
+    let data_root = env.data_root();
+    let cfg = env.config_dir();
+
+    let proj = env.new_dir("SearchApp");
+    let code_file = proj.join("Player.cs");
+    std::fs::write(&code_file, b"public int maxHealth = 100;\n").unwrap();
+    let canon_proj = dunce::canonicalize(&proj)
+        .unwrap()
+        .to_string_lossy()
+        .to_string();
+
+    add_project_root_path(&cfg, &proj).unwrap();
+    toggle_project_provider_sharing_impl(&cfg, &canon_proj, Some(true)).unwrap();
+
+    let conv_id = uuid::Uuid::new_v4().to_string();
+    let user_msg = ChatMessage {
+        id: uuid::Uuid::new_v4().to_string(),
+        role: MessageRole::User,
+        content: "Find where maxHealth is defined".to_string(),
+        status: MessageStatus::Complete,
+    };
+    let initial_conv = ConversationDetail {
+        id: conv_id.clone(),
+        title: "Search Test".to_string(),
+        updated_at: "2026-10-19T10:00:00Z".to_string(),
+        messages: vec![user_msg],
+    };
+    save_conversation_atomic(&data_root, &initial_conv).unwrap();
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+
+    tokio::spawn(async move {
+        let mut request_count = 0;
+        while let Ok((mut socket, _)) = listener.accept().await {
+            request_count += 1;
+            let req_text = read_http_request(&mut socket).await;
+
+            if request_count == 1 {
+                // Round 1: Model invokes search_project_text
+                let sse_obj = serde_json::json!({
+                    "choices": [{
+                        "delta": {
+                            "tool_calls": [{
+                                "index": 0,
+                                "id": "call_search_1",
+                                "type": "function",
+                                "function": {
+                                    "name": "search_project_text",
+                                    "arguments": "{\"query\":\"maxHealth\"}"
+                                }
+                            }]
+                        },
+                        "finish_reason": "tool_calls"
+                    }]
+                });
+                let tool_call = format!("data: {}\n\n", serde_json::to_string(&sse_obj).unwrap());
+
+                let header = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\nTransfer-Encoding: chunked\r\n\r\n";
+                let _ = socket.write_all(header.as_bytes()).await;
+
+                let chunk_hdr = format!("{:X}\r\n{}\r\n", tool_call.len(), tool_call);
+                let _ = socket.write_all(chunk_hdr.as_bytes()).await;
+                let _ = socket.write_all(b"0\r\n\r\n").await;
+            } else if request_count == 2 {
+                // Round 2: Verify tool result was sent back in tool role
+                assert!(req_text.contains("\"role\":\"tool\""));
+                assert!(req_text.contains("maxHealth"));
+                assert!(req_text.contains("Player.cs"));
+
+                // Model outputs response
+                let ans = "data: {\"choices\":[{\"delta\":{\"content\":\"maxHealth is defined in Player.cs on line 1.\"},\"finish_reason\":null}]}\n\n";
+                let stop = "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n";
+                let done = "data: [DONE]\n\n";
+
+                let header = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\nTransfer-Encoding: chunked\r\n\r\n";
+                let _ = socket.write_all(header.as_bytes()).await;
+
+                for p in [ans, stop, done] {
+                    let chunk_hdr = format!("{:X}\r\n{}\r\n", p.len(), p);
+                    let _ = socket.write_all(chunk_hdr.as_bytes()).await;
+                }
+                let _ = socket.write_all(b"0\r\n\r\n").await;
+                break;
+            }
+        }
+    });
+
+    let store = MockSecretStore::new();
+    let state = ChatState::new(store);
+    let req_id = "req-search-stream";
+
+    let cancel_rx = state
+        .try_start_request(req_id, &conv_id)
+        .expect("Should acquire active lock");
+
+    let sink = TestEventSink::new();
+    let base_url = format!("http://{addr}/v1");
+
+    super::commands::execute_chat_stream(
+        sink.clone(),
+        state.clone(),
+        data_root.clone(),
+        cfg.clone(),
+        conv_id.clone(),
+        req_id.to_string(),
+        base_url,
+        "test-model".to_string(),
+        None,
+        initial_conv.messages.clone(),
+        cancel_rx,
+    )
+    .await;
+
+    let events = sink.get_events();
+
+    // Verify tool activity events
+    let activity_events: Vec<&ToolActivityPayload> = events
+        .iter()
+        .filter_map(|e| e.tool_activity.as_ref())
+        .collect();
+    assert!(!activity_events.is_empty());
+    assert_eq!(activity_events[0].status, ToolActivityStatus::Running);
+    assert_eq!(
+        activity_events[0].summary.as_deref(),
+        Some("Searching project text")
+    );
+    assert_eq!(activity_events[1].status, ToolActivityStatus::Succeeded);
+    assert!(
+        activity_events[1]
+            .summary
+            .as_deref()
+            .unwrap()
+            .contains("Found 1 text match(es)")
+    );
+
+    // Verify final assistant message
+    let deltas: Vec<String> = events.iter().filter_map(|e| e.delta.clone()).collect();
+    assert_eq!(
+        deltas,
+        vec!["maxHealth is defined in Player.cs on line 1.".to_string()]
+    );
+
+    // Verify history on disk contains only user message and assistant message (no raw tool chunks)
+    let loaded = load_conversation_from_disk(&data_root, &conv_id).unwrap();
+    assert_eq!(loaded.messages.len(), 2);
+    assert_eq!(loaded.messages[1].role, MessageRole::Assistant);
+    assert_eq!(
+        loaded.messages[1].content,
+        "maxHealth is defined in Player.cs on line 1."
     );
     assert_eq!(loaded.messages[1].status, MessageStatus::Complete);
 }

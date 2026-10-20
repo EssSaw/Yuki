@@ -1,5 +1,29 @@
 # Current handoff
 
+## Search integration checkpoint (2026-10-20)
+
+Implemented search_project_files (glob/literal filename matching) and
+search_project_text (literal content matching) inside share-enabled roots, with
+pre-send reauthorization, exclusions and explicit partial coverage. Parent corrected
+text traversal after budget exhaustion, added enumeration/file/time guards, and rejects
+nonzero text cursors until reliable continuation exists. Filename cursor remains.
+Text scans use a 4 MiB operation budget, not a whole-file-size rejection. Unfinished
+file scans explicitly mark coverage partial. All 102 native tests pass; frontend
+suite and native release build (--no-bundle) passed. No real provider/private-file
+search acceptance claimed. Ready for focused publication. User's live Unity-discovery
+acceptance remains recorded below. Untracked target/ is unrelated and preserved.
+
+
+## Latest feedback and active slice (2026-10-20)
+
+User confirms live Unity-project detection works. Do not infer Godot/Unreal or exhaustive
+coverage acceptance. Discovery/activity published as 17f7a1e. User approved bounded filename
+and literal text search next. Coding agent owns native search/tool integration and related
+architecture docs; no UI changes, writes/commands or MCP are authorized in this slice.
+Enforce active sharing grants, exclusions, pre-send reauthorization and truthful partial
+coverage. Parent will independently validate, update this handoff and publish verified work.
+
+
 ## Discovery and visible activity integration (2026-10-20)
 
 Implemented marker-based Unity/Godot/Unreal discovery within share-enabled roots,

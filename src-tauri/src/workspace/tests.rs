@@ -10,11 +10,16 @@ use super::explorer::{
 };
 use super::models::WorkspaceSettings;
 use super::reader::{MAX_CHUNK_SIZE, authorize_provider_file, read_local_file_chunk_impl};
+use super::search::{
+    FileMatchType, glob_match, matches_file_pattern, reauthorize_search_files_result,
+    reauthorize_search_text_result, search_project_files_impl, search_project_text_impl,
+};
 use super::settings::{
     add_project_root_path, choose_data_root_path, get_workspace_settings_impl, load_settings,
     remove_project_root_impl, resolve_data_root_subdir, save_settings_atomic,
     toggle_project_provider_sharing_impl,
 };
+use crate::chat::tools::execute_tool;
 
 /// Test helper providing an isolated sandbox within the project directory (target/test_temp),
 /// strictly avoiding /tmp, /var/tmp, or user directories.
@@ -1322,4 +1327,802 @@ fn test_discover_game_projects_depth_and_limits() {
     assert_eq!(res.coverage, "partial");
     assert!(res.truncated);
     assert!(res.limits_reached.contains(&"max_depth".to_string()));
+}
+
+// ---------------------------------------------------------------------------
+// Search Tools Native Unit & Integration Tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_glob_match_patterns_and_metacharacters() {
+    // Basic exact match
+    assert!(glob_match("file.txt", "file.txt", true));
+    assert!(!glob_match("file.txt", "file.doc", true));
+
+    // Case sensitivity
+    assert!(glob_match("File.TXT", "file.txt", false));
+    assert!(!glob_match("File.TXT", "file.txt", true));
+
+    // Wildcard *
+    assert!(glob_match("*.cs", "Player.cs", false));
+    assert!(glob_match("*.cs", "Player.CS", false));
+    assert!(!glob_match("*.cs", "Player.cs.bak", false));
+    assert!(glob_match("Player*.cs", "PlayerController.cs", false));
+    assert!(glob_match(
+        "Player*Controller*.cs",
+        "PlayerMovementController2D.cs",
+        false
+    ));
+    assert!(glob_match("*test*", "my_test_runner.rs", false));
+    assert!(glob_match("*", "anything.txt", false));
+
+    // Wildcard ?
+    assert!(glob_match("file?.txt", "file1.txt", false));
+    assert!(glob_match("file?.txt", "fileA.txt", false));
+    assert!(!glob_match("file?.txt", "file12.txt", false));
+    assert!(!glob_match("file?.txt", "file.txt", false));
+
+    // Unicode in pattern and text
+    assert!(glob_match("*雪*.txt", "冬の雪景色.txt", false));
+    assert!(glob_match("*🦀*", "rust_🦀_test", false));
+    assert!(!glob_match("*雪*.txt", "雨の日.txt", false));
+}
+
+#[test]
+fn test_matches_file_pattern_literal_vs_glob() {
+    // Literal mode treats metacharacters as exact literal characters
+    assert!(matches_file_pattern(
+        "test*.cs",
+        "test*.cs",
+        "test*.cs",
+        FileMatchType::Literal,
+        true
+    ));
+    assert!(!matches_file_pattern(
+        "testing.cs",
+        "testing.cs",
+        "test*.cs",
+        FileMatchType::Literal,
+        true
+    ));
+
+    assert!(matches_file_pattern(
+        "[0].txt",
+        "[0].txt",
+        "[0].txt",
+        FileMatchType::Literal,
+        true
+    ));
+    assert!(!matches_file_pattern(
+        "0.txt",
+        "0.txt",
+        "[0].txt",
+        FileMatchType::Literal,
+        true
+    ));
+
+    assert!(matches_file_pattern(
+        "Player.cs",
+        "Player.cs",
+        "Player",
+        FileMatchType::Literal,
+        false
+    ));
+    assert!(matches_file_pattern(
+        "player.cs",
+        "player.cs",
+        "Player",
+        FileMatchType::Literal,
+        false
+    ));
+    assert!(!matches_file_pattern(
+        "player.cs",
+        "player.cs",
+        "Player",
+        FileMatchType::Literal,
+        true
+    ));
+
+    // Path matching with slashes
+    assert!(matches_file_pattern(
+        "Player.cs",
+        "Scripts/Player.cs",
+        "Scripts/Player",
+        FileMatchType::Literal,
+        false
+    ));
+    assert!(matches_file_pattern(
+        "Player.cs",
+        "Scripts\\Player.cs",
+        "Scripts/Player",
+        FileMatchType::Literal,
+        false
+    ));
+
+    // Glob mode
+    assert!(matches_file_pattern(
+        "Player.cs",
+        "Scripts/Player.cs",
+        "*.cs",
+        FileMatchType::Glob,
+        false
+    ));
+    assert!(matches_file_pattern(
+        "Player.cs",
+        "Scripts/Player.cs",
+        "Scripts/*.cs",
+        FileMatchType::Glob,
+        false
+    ));
+    assert!(!matches_file_pattern(
+        "Player.cs",
+        "Assets/Player.cs",
+        "Scripts/*.cs",
+        FileMatchType::Glob,
+        false
+    ));
+}
+
+#[test]
+fn test_search_files_permissions_and_exclusions() {
+    let env = TestEnv::new("search_files_perms");
+    let cfg = env.config_dir();
+    let root = env.new_dir("SearchRoot");
+    let canon_root = dunce::canonicalize(&root)
+        .unwrap()
+        .to_string_lossy()
+        .to_string();
+
+    // 1. Unapproved root rejected
+    let unapproved_args = serde_json::json!({
+        "pattern": "*.cs",
+        "project_root": canon_root
+    })
+    .to_string();
+    let err_unapproved = search_project_files_impl(&cfg, &unapproved_args).unwrap_err();
+    assert!(err_unapproved.contains("Access denied"));
+
+    // 2. Approved but ungranted root rejected
+    add_project_root_path(&cfg, &root).unwrap();
+    let err_ungranted = search_project_files_impl(&cfg, &unapproved_args).unwrap_err();
+    assert!(err_ungranted.contains("Access denied"));
+
+    // 3. Enable sharing
+    toggle_project_provider_sharing_impl(&cfg, &canon_root, Some(true)).unwrap();
+
+    // Populate directory with normal, secret, cache, and link entries
+    let normal_file = root.join("PlayerController.cs");
+    std::fs::write(&normal_file, b"// normal").unwrap();
+
+    let sub_dir = root.join("Assets");
+    std::fs::create_dir_all(&sub_dir).unwrap();
+    let sub_file = sub_dir.join("Enemy.cs");
+    std::fs::write(&sub_file, b"// enemy").unwrap();
+
+    // Secret files that must NEVER be returned
+    let env_file = root.join(".env");
+    std::fs::write(&env_file, b"SECRET=123").unwrap();
+    let env_local = root.join(".env.local");
+    std::fs::write(&env_local, b"SECRET=local").unwrap();
+    let creds_file = root.join("credentials.json");
+    std::fs::write(&creds_file, b"{}").unwrap();
+    let key_file = root.join("server.pem");
+    std::fs::write(&key_file, b"KEY").unwrap();
+    let secrets_file = root.join("secrets.yaml");
+    std::fs::write(&secrets_file, b"secrets: true").unwrap();
+
+    // Secret directory that must NEVER be traversed
+    let ssh_dir = root.join(".ssh");
+    std::fs::create_dir_all(&ssh_dir).unwrap();
+    let ssh_key = ssh_dir.join("id_rsa.cs"); // Even if named .cs!
+    std::fs::write(&ssh_key, b"SSH").unwrap();
+
+    // Cache directory that must NEVER be traversed
+    let lib_dir = root.join("Library");
+    std::fs::create_dir_all(&lib_dir).unwrap();
+    let cache_file = lib_dir.join("Cached.cs");
+    std::fs::write(&cache_file, b"cache").unwrap();
+
+    // Search for *.cs with glob
+    let args = serde_json::json!({
+        "pattern": "*.cs",
+        "match_type": "glob",
+        "project_root": canon_root
+    })
+    .to_string();
+
+    let res = search_project_files_impl(&cfg, &args).unwrap();
+    assert_eq!(res.coverage, "complete");
+    assert!(!res.truncated);
+    assert_eq!(res.matches.len(), 2);
+
+    let match_names: Vec<&str> = res.matches.iter().map(|m| m.name.as_str()).collect();
+    assert!(match_names.contains(&"PlayerController.cs"));
+    assert!(match_names.contains(&"Enemy.cs"));
+    assert!(
+        !match_names.contains(&"id_rsa.cs"),
+        "Secret directory files must be excluded"
+    );
+    assert!(
+        !match_names.contains(&"Cached.cs"),
+        "Cache directory files must be excluded"
+    );
+
+    // Search specifically for secrets: should find 0 matches
+    let secret_args = serde_json::json!({
+        "pattern": "*env*",
+        "match_type": "glob",
+        "project_root": canon_root
+    })
+    .to_string();
+    let secret_res = search_project_files_impl(&cfg, &secret_args).unwrap();
+    assert_eq!(
+        secret_res.matches.len(),
+        0,
+        "Secret files must be strictly excluded"
+    );
+}
+
+#[test]
+fn test_search_files_literal_metacharacters_and_modes() {
+    let env = TestEnv::new("search_files_modes");
+    let cfg = env.config_dir();
+    let root = env.new_dir("ModesRoot");
+    let canon_root = dunce::canonicalize(&root)
+        .unwrap()
+        .to_string_lossy()
+        .to_string();
+
+    add_project_root_path(&cfg, &root).unwrap();
+    toggle_project_provider_sharing_impl(&cfg, &canon_root, Some(true)).unwrap();
+
+    // Create files with literal metacharacters and names
+    std::fs::write(root.join("test_special.cs"), b"special").unwrap();
+    std::fs::write(root.join("test_normal.cs"), b"normal").unwrap();
+    std::fs::write(root.join("[0]_item.json"), b"brackets").unwrap();
+    std::fs::write(root.join("CaseSensitive.txt"), b"case").unwrap();
+
+    // 1. Literal search for "test_*.cs": should match 0 files because '*' is treated literally
+    let lit_args = serde_json::json!({
+        "pattern": "test_*.cs",
+        "match_type": "literal",
+        "project_root": canon_root
+    })
+    .to_string();
+    let lit_res = search_project_files_impl(&cfg, &lit_args).unwrap();
+    assert_eq!(lit_res.matches.len(), 0);
+
+    // 2. Glob search for "test_*.cs": matches BOTH "test_special.cs" and "test_normal.cs"
+    let glob_args = serde_json::json!({
+        "pattern": "test_*.cs",
+        "match_type": "glob",
+        "project_root": canon_root
+    })
+    .to_string();
+    let glob_res = search_project_files_impl(&cfg, &glob_args).unwrap();
+    assert_eq!(glob_res.matches.len(), 2);
+
+    // 3. Literal search for "[0]" (bracket characters that regex would treat as char class)
+    let bracket_args = serde_json::json!({
+        "pattern": "[0]",
+        "match_type": "literal",
+        "project_root": canon_root
+    })
+    .to_string();
+    let bracket_res = search_project_files_impl(&cfg, &bracket_args).unwrap();
+    assert_eq!(bracket_res.matches.len(), 1);
+    assert_eq!(bracket_res.matches[0].name, "[0]_item.json");
+
+    // 4. Case-sensitivity toggle
+    let case_off_args = serde_json::json!({
+        "pattern": "casesensitive",
+        "case_sensitive": false,
+        "project_root": canon_root
+    })
+    .to_string();
+    let case_off_res = search_project_files_impl(&cfg, &case_off_args).unwrap();
+    assert_eq!(case_off_res.matches.len(), 1);
+
+    let case_on_args = serde_json::json!({
+        "pattern": "casesensitive",
+        "case_sensitive": true,
+        "project_root": canon_root
+    })
+    .to_string();
+    let case_on_res = search_project_files_impl(&cfg, &case_on_args).unwrap();
+    assert_eq!(case_on_res.matches.len(), 0);
+}
+
+#[test]
+fn test_search_files_coverage_budgets_and_cursor() {
+    let env = TestEnv::new("search_files_budgets");
+    let cfg = env.config_dir();
+    let root = env.new_dir("BudgetRoot");
+    let canon_root = dunce::canonicalize(&root)
+        .unwrap()
+        .to_string_lossy()
+        .to_string();
+
+    add_project_root_path(&cfg, &root).unwrap();
+    toggle_project_provider_sharing_impl(&cfg, &canon_root, Some(true)).unwrap();
+
+    // Create 5 files alphabetically
+    for c in ['A', 'B', 'C', 'D', 'E'] {
+        std::fs::write(root.join(format!("File_{c}.txt")), b"test").unwrap();
+    }
+
+    // 1. max_results = 2
+    let page1_args = serde_json::json!({
+        "pattern": "File_",
+        "max_results": 2,
+        "project_root": canon_root
+    })
+    .to_string();
+    let page1 = search_project_files_impl(&cfg, &page1_args).unwrap();
+    assert_eq!(page1.matches.len(), 2);
+    assert_eq!(page1.matches[0].name, "File_A.txt");
+    assert_eq!(page1.matches[1].name, "File_B.txt");
+    assert_eq!(page1.coverage, "partial");
+    assert!(page1.truncated);
+    assert!(page1.limits_reached.contains(&"max_results".to_string()));
+    assert_eq!(page1.next_cursor, Some(2));
+
+    // 2. Cursor pagination: cursor = 2, max_results = 2
+    let page2_args = serde_json::json!({
+        "pattern": "File_",
+        "cursor": 2,
+        "max_results": 2,
+        "project_root": canon_root
+    })
+    .to_string();
+    let page2 = search_project_files_impl(&cfg, &page2_args).unwrap();
+    assert_eq!(page2.matches.len(), 2);
+    assert_eq!(page2.matches[0].name, "File_C.txt");
+    assert_eq!(page2.matches[1].name, "File_D.txt");
+    assert_eq!(page2.next_cursor, Some(4));
+
+    // 3. Cursor pagination: cursor = 4, max_results = 2 (page 3 reaches end)
+    let page3_args = serde_json::json!({
+        "pattern": "File_",
+        "cursor": 4,
+        "max_results": 2,
+        "project_root": canon_root
+    })
+    .to_string();
+    let page3 = search_project_files_impl(&cfg, &page3_args).unwrap();
+    assert_eq!(page3.matches.len(), 1);
+    assert_eq!(page3.matches[0].name, "File_E.txt");
+    assert_eq!(page3.coverage, "complete");
+    assert!(!page3.truncated);
+    assert_eq!(page3.next_cursor, None);
+}
+
+#[test]
+fn test_search_files_reauthorization_revocation() {
+    let env = TestEnv::new("search_files_reauth");
+    let cfg = env.config_dir();
+    let root1 = env.new_dir("RootOne");
+    let root2 = env.new_dir("RootTwo");
+    let canon_r1 = dunce::canonicalize(&root1)
+        .unwrap()
+        .to_string_lossy()
+        .to_string();
+    let canon_r2 = dunce::canonicalize(&root2)
+        .unwrap()
+        .to_string_lossy()
+        .to_string();
+
+    add_project_root_path(&cfg, &root1).unwrap();
+    add_project_root_path(&cfg, &root2).unwrap();
+    toggle_project_provider_sharing_impl(&cfg, &canon_r1, Some(true)).unwrap();
+    toggle_project_provider_sharing_impl(&cfg, &canon_r2, Some(true)).unwrap();
+
+    let file1 = root1.join("Item1.txt");
+    let file2 = root2.join("Item2.txt");
+    std::fs::write(&file1, b"1").unwrap();
+    std::fs::write(&file2, b"2").unwrap();
+
+    let mut res_str = execute_tool(&cfg, "search_project_files", "{\"pattern\":\"Item\"}");
+    assert!(res_str.contains("Item1.txt"));
+    assert!(res_str.contains("Item2.txt"));
+
+    // Revoke root1 sharing
+    toggle_project_provider_sharing_impl(&cfg, &canon_r1, Some(false)).unwrap();
+
+    reauthorize_search_files_result(&cfg, &mut res_str);
+    assert!(
+        !res_str.contains("Item1.txt"),
+        "Revoked root results must be pruned"
+    );
+    assert!(res_str.contains("Item2.txt"));
+    assert!(res_str.contains("\"revoked_grant\""));
+    assert!(res_str.contains("\"coverage\":\"partial\""));
+
+    // Revoke root2 sharing (all revoked)
+    toggle_project_provider_sharing_impl(&cfg, &canon_r2, Some(false)).unwrap();
+
+    reauthorize_search_files_result(&cfg, &mut res_str);
+    assert!(
+        res_str.contains("error"),
+        "Must replace with error payload when all roots revoked"
+    );
+    assert!(
+        !res_str.contains("Item2.txt"),
+        "No filenames or paths may leak"
+    );
+}
+
+#[test]
+fn test_search_text_permissions_and_exclusions() {
+    let env = TestEnv::new("search_text_perms");
+    let cfg = env.config_dir();
+    let root = env.new_dir("TextRoot");
+    let canon_root = dunce::canonicalize(&root)
+        .unwrap()
+        .to_string_lossy()
+        .to_string();
+
+    // 1. Unapproved root rejected
+    let unapproved_args = serde_json::json!({
+        "query": "HEALTH_KEYWORD",
+        "project_root": canon_root
+    })
+    .to_string();
+    let err_unapproved = search_project_text_impl(&cfg, &unapproved_args).unwrap_err();
+    assert!(err_unapproved.contains("Access denied"));
+
+    add_project_root_path(&cfg, &root).unwrap();
+    toggle_project_provider_sharing_impl(&cfg, &canon_root, Some(true)).unwrap();
+
+    // Normal file
+    let normal_file = root.join("Game.cs");
+    std::fs::write(&normal_file, b"public int HEALTH_KEYWORD = 100;\n").unwrap();
+
+    // Secret file containing same keyword
+    let env_file = root.join(".env");
+    std::fs::write(&env_file, b"HEALTH_KEYWORD=SUPER_SECRET\n").unwrap();
+
+    // Secret directory containing file with same keyword
+    let ssh_dir = root.join(".ssh");
+    std::fs::create_dir_all(&ssh_dir).unwrap();
+    std::fs::write(ssh_dir.join("config.txt"), b"HEALTH_KEYWORD in ssh\n").unwrap();
+
+    // Cache directory containing file with same keyword
+    let cache_dir = root.join("node_modules");
+    std::fs::create_dir_all(&cache_dir).unwrap();
+    std::fs::write(
+        cache_dir.join("pkg.js"),
+        b"HEALTH_KEYWORD in node_modules\n",
+    )
+    .unwrap();
+
+    let args = serde_json::json!({
+        "query": "HEALTH_KEYWORD",
+        "project_root": canon_root
+    })
+    .to_string();
+
+    let res = search_project_text_impl(&cfg, &args).unwrap();
+    assert_eq!(res.matches.len(), 1);
+    assert_eq!(res.matches[0].relative_path, "Game.cs");
+    assert!(res.matches[0].snippet.contains("HEALTH_KEYWORD"));
+    assert!(!res.matches.iter().any(|m| m.relative_path.contains(".env")));
+    assert!(!res.matches.iter().any(|m| m.relative_path.contains(".ssh")));
+    assert!(
+        !res.matches
+            .iter()
+            .any(|m| m.relative_path.contains("node_modules"))
+    );
+}
+
+#[test]
+fn test_search_text_literal_metacharacters_and_case() {
+    let env = TestEnv::new("search_text_literals");
+    let cfg = env.config_dir();
+    let root = env.new_dir("LiteralsRoot");
+    let canon_root = dunce::canonicalize(&root)
+        .unwrap()
+        .to_string_lossy()
+        .to_string();
+
+    add_project_root_path(&cfg, &root).unwrap();
+    toggle_project_provider_sharing_impl(&cfg, &canon_root, Some(true)).unwrap();
+
+    let code_file = root.join("code.txt");
+    std::fs::write(
+        &code_file,
+        b"let val = arr[0];\nlet regex = foo*bar;\nlet price = $100;\nfn Greeter() { println!(\"\xd0\x9f\xd1\x80\xd0\xb8\xd0\xb2\xd0\xb5\xd1\x82\"); }\n",
+    )
+    .unwrap();
+
+    // 1. Literal metacharacters "$100"
+    let args1 = serde_json::json!({
+        "query": "$100",
+        "project_root": canon_root
+    })
+    .to_string();
+    let res1 = search_project_text_impl(&cfg, &args1).unwrap();
+    assert_eq!(res1.matches.len(), 1);
+    assert_eq!(res1.matches[0].line_number, 3);
+    assert!(res1.matches[0].snippet.contains("$100"));
+
+    // 2. Literal metacharacters "arr[0];"
+    let args2 = serde_json::json!({
+        "query": "arr[0];",
+        "project_root": canon_root
+    })
+    .to_string();
+    let res2 = search_project_text_impl(&cfg, &args2).unwrap();
+    assert_eq!(res2.matches.len(), 1);
+    assert_eq!(res2.matches[0].line_number, 1);
+
+    // 3. Literal "foo*bar" without wildcard interpretation
+    let args3 = serde_json::json!({
+        "query": "foo*bar",
+        "project_root": canon_root
+    })
+    .to_string();
+    let res3 = search_project_text_impl(&cfg, &args3).unwrap();
+    assert_eq!(res3.matches.len(), 1);
+    assert_eq!(res3.matches[0].line_number, 2);
+
+    // 4. Unicode case-insensitive matching: Cyrillic "привет" matches "Привет"
+    let args4 = serde_json::json!({
+        "query": "привет", // lowercase "привет"
+        "case_sensitive": false,
+        "project_root": canon_root
+    })
+    .to_string();
+    let res4 = search_project_text_impl(&cfg, &args4).unwrap();
+    assert_eq!(res4.matches.len(), 1);
+    assert_eq!(res4.matches[0].line_number, 4);
+
+    // With case_sensitive: true, lowercase "привет" does NOT match uppercase "Привет"
+    let args5 = serde_json::json!({
+        "query": "привет",
+        "case_sensitive": true,
+        "project_root": canon_root
+    })
+    .to_string();
+    let res5 = search_project_text_impl(&cfg, &args5).unwrap();
+    assert_eq!(res5.matches.len(), 0);
+}
+
+#[test]
+fn test_search_text_boundary_spanning_and_cross_chunk_utf8() {
+    let env = TestEnv::new("search_text_boundary");
+    let cfg = env.config_dir();
+    let root = env.new_dir("BoundaryRoot");
+    let canon_root = dunce::canonicalize(&root)
+        .unwrap()
+        .to_string_lossy()
+        .to_string();
+
+    add_project_root_path(&cfg, &root).unwrap();
+    toggle_project_provider_sharing_impl(&cfg, &canon_root, Some(true)).unwrap();
+
+    // SEARCH_READ_CHUNK_SIZE is 32 KiB (32768 bytes).
+    // Construct a file where:
+    // 1. Bytes 0..32760 are filler 'A's with newlines.
+    // 2. Target "BOUNDARY_SPANNING_TARGET" starts at byte 32762 and spans across 32768!
+    let mut content = Vec::new();
+    for i in 0..1000 {
+        content
+            .extend_from_slice(format!("Line_{i:04}: aaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n").as_bytes());
+    }
+    // Truncate or pad to exactly byte 32760
+    content.truncate(32760);
+    while content.len() < 32760 {
+        content.push(b'x');
+    }
+    content.push(b'\n'); // byte 32760 is newline
+
+    // Place target: "CROSS_CHUNK_KEYWORD" (19 bytes) starting at byte 32761
+    // Byte 32761..32768 (7 bytes in chunk 1: "CROSS_C")
+    // Byte 32768..32780 (12 bytes in chunk 2: "HUNK_KEYWORD")
+    content.extend_from_slice(b"CROSS_CHUNK_KEYWORD\n");
+
+    // Add multi-byte UTF-8 character spanning boundary in another section:
+    // Append 32740 bytes of filler, then place 3-byte Japanese character '雪' (0xE9 0x9B 0xAA)
+    // right across chunk boundary!
+    let target_offset = 65535; // boundary between chunk 2 and chunk 3
+    while content.len() < target_offset {
+        content.push(b'y');
+    }
+    content.extend_from_slice("雪の結晶\n".as_bytes());
+
+    let boundary_file = root.join("boundary.txt");
+    std::fs::write(&boundary_file, &content).unwrap();
+
+    // 1. Search for boundary-spanning keyword
+    let args1 = serde_json::json!({
+        "query": "CROSS_CHUNK_KEYWORD",
+        "project_root": canon_root
+    })
+    .to_string();
+    let res1 = search_project_text_impl(&cfg, &args1).unwrap();
+    assert_eq!(
+        res1.matches.len(),
+        1,
+        "Must find match that spans chunk boundaries"
+    );
+    assert_eq!(res1.matches[0].byte_offset, 32761);
+    assert!(res1.matches[0].snippet.contains("CROSS_CHUNK_KEYWORD"));
+
+    // 2. Search for keyword after split multi-byte UTF-8 character
+    let args2 = serde_json::json!({
+        "query": "雪の結晶",
+        "project_root": canon_root
+    })
+    .to_string();
+    let res2 = search_project_text_impl(&cfg, &args2).unwrap();
+    assert_eq!(
+        res2.matches.len(),
+        1,
+        "Must cleanly decode split multi-byte UTF-8 without error"
+    );
+}
+
+#[test]
+fn test_search_text_large_file_and_long_lines() {
+    let env = TestEnv::new("search_text_large");
+    let cfg = env.config_dir();
+    let root = env.new_dir("LargeRoot");
+    let canon_root = dunce::canonicalize(&root)
+        .unwrap()
+        .to_string_lossy()
+        .to_string();
+
+    add_project_root_path(&cfg, &root).unwrap();
+    toggle_project_provider_sharing_impl(&cfg, &canon_root, Some(true)).unwrap();
+
+    // 1. Large file: 128 KiB without arbitrary size rejection
+    let mut large_content = Vec::new();
+    for i in 0..4000 {
+        if i == 2500 {
+            large_content.extend_from_slice(b"Found in middle: UNIQUE_LARGE_TARGET;\n");
+        } else {
+            large_content.extend_from_slice(b"Normal log line entry in large file\n");
+        }
+    }
+    let large_file = root.join("large_log.txt");
+    std::fs::write(&large_file, &large_content).unwrap();
+
+    let args_large = serde_json::json!({
+        "query": "UNIQUE_LARGE_TARGET",
+        "project_root": canon_root
+    })
+    .to_string();
+    let res_large = search_project_text_impl(&cfg, &args_large).unwrap();
+    assert_eq!(res_large.matches.len(), 1);
+    assert_eq!(res_large.matches[0].line_number, 2501);
+    assert!(res_large.matches[0].snippet.contains("UNIQUE_LARGE_TARGET"));
+
+    // 2. Long line: 5,000 characters on a single minified line
+    let mut long_line = String::new();
+    long_line.push_str(&"x".repeat(2500));
+    long_line.push_str("MINIFIED_MATCH_TARGET");
+    long_line.push_str(&"y".repeat(2500));
+    long_line.push('\n');
+
+    let minified_file = root.join("bundle.min.js");
+    std::fs::write(&minified_file, long_line.as_bytes()).unwrap();
+
+    let args_long = serde_json::json!({
+        "query": "MINIFIED_MATCH_TARGET",
+        "project_root": canon_root
+    })
+    .to_string();
+    let res_long = search_project_text_impl(&cfg, &args_long).unwrap();
+    assert_eq!(res_long.matches.len(), 1);
+    let snip = &res_long.matches[0].snippet;
+    assert!(
+        snip.len() <= 200,
+        "Snippet on long line must be bounded to <= 200 chars"
+    );
+    assert!(snip.contains("MINIFIED_MATCH_TARGET"));
+    assert!(
+        snip.starts_with("... "),
+        "Snippet must have prefix truncation indicator"
+    );
+    assert!(
+        snip.ends_with(" ..."),
+        "Snippet must have suffix truncation indicator"
+    );
+}
+
+#[test]
+fn test_search_text_binary_rejection_and_unscanned_remainder() {
+    let env = TestEnv::new("search_text_binary");
+    let cfg = env.config_dir();
+    let root = env.new_dir("BinaryRoot");
+    let canon_root = dunce::canonicalize(&root)
+        .unwrap()
+        .to_string_lossy()
+        .to_string();
+
+    add_project_root_path(&cfg, &root).unwrap();
+    toggle_project_provider_sharing_impl(&cfg, &canon_root, Some(true)).unwrap();
+
+    // 1. Text file with target
+    std::fs::write(root.join("valid1.txt"), b"HELLO_TARGET in valid file 1\n").unwrap();
+    std::fs::write(root.join("valid2.txt"), b"HELLO_TARGET in valid file 2\n").unwrap();
+    std::fs::write(root.join("valid3.txt"), b"HELLO_TARGET in valid file 3\n").unwrap();
+
+    // 2. Binary file with null bytes containing same target bytes
+    let mut binary_bytes = b"HELLO_TARGET in binary".to_vec();
+    binary_bytes.insert(0, 0); // null byte at start
+    std::fs::write(root.join("image.png"), &binary_bytes).unwrap();
+
+    let args = serde_json::json!({
+        "query": "HELLO_TARGET",
+        "max_results": 2, // limit to 2 results to check unscanned remainder
+        "project_root": canon_root
+    })
+    .to_string();
+
+    let res = search_project_text_impl(&cfg, &args).unwrap();
+    assert_eq!(res.matches.len(), 2);
+    assert_eq!(res.coverage, "partial");
+    assert!(res.truncated);
+    assert!(res.limits_reached.contains(&"max_results".to_string()));
+    assert!(
+        res.binary_files_skipped >= 1,
+        "Must count skipped binary file"
+    );
+    assert!(
+        res.unscanned_files_remainder >= 1,
+        "Must report unscanned files remainder"
+    );
+
+    // 3. file_pattern filter: '*.txt' should skip other file extensions
+    let filter_args = serde_json::json!({
+        "query": "HELLO_TARGET",
+        "file_pattern": "*.txt",
+        "project_root": canon_root
+    })
+    .to_string();
+    let filter_res = search_project_text_impl(&cfg, &filter_args).unwrap();
+    assert_eq!(filter_res.matches.len(), 3);
+    assert!(!filter_res.matches.iter().any(|m| m.path.ends_with(".png")));
+}
+
+#[test]
+fn test_search_text_reauthorization_revocation() {
+    let env = TestEnv::new("search_text_reauth");
+    let cfg = env.config_dir();
+    let root = env.new_dir("TextReauthRoot");
+    let canon_root = dunce::canonicalize(&root)
+        .unwrap()
+        .to_string_lossy()
+        .to_string();
+
+    add_project_root_path(&cfg, &root).unwrap();
+    toggle_project_provider_sharing_impl(&cfg, &canon_root, Some(true)).unwrap();
+
+    let file = root.join("source.cs");
+    std::fs::write(&file, b"public void DoAction() { Log(\"SecretValue\"); }\n").unwrap();
+
+    let mut res_str = execute_tool(
+        &cfg,
+        "search_project_text",
+        &serde_json::json!({
+            "query": "SecretValue",
+            "project_root": canon_root
+        })
+        .to_string(),
+    );
+    assert!(res_str.contains("SecretValue"));
+
+    // Revoke sharing
+    toggle_project_provider_sharing_impl(&cfg, &canon_root, Some(false)).unwrap();
+
+    // Reauthorize before transmission
+    reauthorize_search_text_result(&cfg, &mut res_str);
+    assert!(res_str.contains("error"), "Must replace result with error");
+    assert!(
+        !res_str.contains("SecretValue"),
+        "No text snippets or secret paths may leak"
+    );
+    assert!(res_str.contains("revoked_grant"));
 }

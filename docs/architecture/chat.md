@@ -78,6 +78,38 @@ read-only tool-calling loop governed by strict containment, budgeting, and provi
       - Emits explicit coverage metadata: `coverage: "complete" | "partial"`, `truncated: bool`,
         `limitsReached: ["max_depth" | "max_directories" | "max_results" | "timeout" | "revoked_grant"]`,
         and `directoriesScanned: usize`. Never makes false exhaustive claims.
+  - `search_project_files`: scans approved, share-enabled project roots for filenames or relative paths
+    matching a glob or literal pattern.
+    - Parameters:
+      - `pattern` (string, required): filename or relative path pattern (e.g. `*.cs`, `Player*`, `Scripts/Player`).
+      - `match_type` (string, optional, `"glob"` | `"literal"`, default `"glob"`): wildcard matching (`*`, `?`) vs exact substring.
+      - `case_sensitive` (bool, optional, default false): case-sensitivity toggle.
+      - `project_root` (string, optional): specific approved root to search (defaults to all share-enabled roots).
+      - `max_results` (integer, optional, 1..100, default 50): result count cap.
+      - `cursor` (string, optional): opaque token to continue paginated traversal.
+    - Bounds & coverage:
+      - Traversal bounded by `MAX_FILES_SEARCH_DIRECTORIES` (1000), `MAX_FILES_RESULTS` (100), `MAX_FILES_SEARCH_TIME` (5s),
+        and `MAX_SERIALIZED_RESULT_BYTES` (60 KiB).
+      - Reuses centralized exclusion policy (skips symlinks, junctions, dot-directories, build caches, secrets, system paths).
+      - Emits explicit coverage metadata (`complete` | `partial`), `truncated: bool`, `limitsReached`,
+        `directoriesScanned`, `filesInspected`, and `nextCursor`.
+  - `search_project_text`: performs bounded literal text search within authorized UTF-8 source files across
+    share-enabled project roots without arbitrary regex execution.
+    - Parameters:
+      - `query` (string, required): literal text substring to search for. No arbitrary regex execution.
+      - `case_sensitive` (bool, optional, default false): Unicode-aware case-sensitivity toggle.
+      - `file_pattern` (string, optional): optional glob or literal filter on filenames to inspect (e.g. `*.cs`, `*.rs`).
+      - `project_root` (string, optional): specific approved root to search (defaults to all share-enabled roots).
+      - `max_matches` (integer, optional, 1..50, default 20): match count cap.
+      - `cursor` (string, optional): opaque token to continue paginated text search.
+    - Streaming & bounds:
+      - Streams files in 32 KiB chunks without arbitrary whole-file rejection.
+      - Carries over boundary-spanning match windows across chunk buffers without duplicate emissions.
+      - Handles cross-chunk UTF-8 multi-byte splits by rolling back incomplete trailing byte sequences.
+      - Extracts short bounded snippets (up to 200 chars around match on UTF-8 char boundaries) with line and byte locations.
+      - Enforces strict budgets: `MAX_TEXT_FILES_INSPECTED` (200), `MAX_TEXT_BYTES_INSPECTED` (20 MiB),
+        `MAX_TEXT_TIME_BUDGET` (5.0s), and `MAX_SERIALIZED_RESULT_BYTES` (60 KiB).
+      - Accurately tracks `unsupportedBinaryFiles` (null byte or invalid UTF-8) and `unscannedRemainder`.
   - `list_shareable_projects`: returns approved project roots that currently have explicit
     provider-sharing grants enabled.
   - `list_project_directory`: returns files and subdirectories within a granted root.
@@ -86,12 +118,12 @@ read-only tool-calling loop governed by strict containment, budgeting, and provi
   - `read_file_chunk`: reads bounded UTF-8 text (up to 64 KiB) from an authorized file
     inside a granted project root. Clamped to UTF-8 scalar boundaries.
 - **Security & transmission boundary**:
-  - No writes, shell execution, search/indexing, ungranted uploads, or background inference.
+  - No writes, shell execution, arbitrary regex execution, ungranted uploads, or background inference.
   - Reauthorization before send: immediately before any tool result payload crosses the
     network boundary to the provider, `reauthorize_tool_result` rechecks active root grants.
-    For `discover_game_projects`, results from any root whose sharing was revoked are pruned,
-    flagged with `limitsReached: ["revoked_grant"]`, and if all roots were revoked, replaced
-    with an authorization error before crossing the network.
+    For `discover_game_projects`, `search_project_files`, and `search_project_text`, results
+    from any root whose sharing was revoked are pruned, flagged with `limitsReached: ["revoked_grant"]`,
+    and if all roots were revoked, replaced with an authorization error before crossing the network.
   - Untrusted data framing: tool outputs and file text are sent with `role: "tool"` and
     treated strictly as data, never as prompt instruction overrides.
 - **Observable tool activity contract**:
@@ -176,3 +208,10 @@ file-size limit. Retained tool results are reauthorized on each subsequent reque
 request-send waits also participate in cancellation. File contents in assistant-generated
 answers can still appear in ordinary conversation history; excluding raw tool messages
 from history does not imply that generated answers contain no project information.
+
+Integration clarification: text-search nonzero cursors are currently rejected rather
+than claiming reliable continuation. Narrow the root or file_pattern after partial
+coverage. Filename search retains its match-offset cursor. Actual text inspection is
+bounded to 4 MiB per operation, 200 files and 5 seconds, with per-directory enumeration
+capped at 20,000 entries. An unfinished file scan is explicitly partial; these are
+operation budgets, not a total on-disk file-size prohibition.
