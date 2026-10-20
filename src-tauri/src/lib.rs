@@ -6,9 +6,11 @@ pub mod workspace;
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let chat_state = chat::state::ChatState::new_default();
+    let mcp_state = mcp::session::McpSessionManager::default();
 
     tauri::Builder::default()
         .manage(chat_state)
+        .manage(mcp_state)
         .invoke_handler(tauri::generate_handler![
             workspace::commands::get_workspace_settings,
             workspace::commands::choose_data_root,
@@ -35,6 +37,12 @@ pub fn run() {
             mcp::commands::approve_mcp_endpoint,
             mcp::commands::revoke_mcp_endpoint,
             mcp::commands::get_mcp_grants,
+            mcp::commands::connect_approved_mcp_endpoint,
+            mcp::commands::list_connected_unity_instances,
+            mcp::commands::bind_unity_instance,
+            mcp::commands::get_bound_unity_state,
+            mcp::commands::disconnect,
+            mcp::commands::disconnect_mcp_session,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Yuki");

@@ -81,3 +81,103 @@ Two sources of candidates are inspected:
 | `approve_mcp_endpoint` | `endpoint: String` | `McpGrantResult` | Validates, canonicalizes, and approves a loopback endpoint URL. |
 | `revoke_mcp_endpoint` | `endpoint: String` | `McpGrantResult` | Revokes approval for a canonical loopback endpoint URL. |
 | `get_mcp_grants` | - | `Vec<McpEndpointGrant>` | Lists all currently approved endpoint grants. |
+
+---
+
+# Native MCP Session Foundation: Lifecycle & Instance Binding
+
+Following the discovery and approval phase, this slice establishes the runtime native MCP session foundation for connecting to approved loopback HTTP endpoints, negotiating protocol versions, managing session headers, explicitly discovering and binding Unity editor instances, and performing local project path verification.
+
+## Architecture and Scope
+
+The native session foundation is purely an internal engine foundation:
+- **No Provider/Model Exposure**: Connected sessions, resources, and tools are not registered with AI model contexts or chat tool registries in this slice.
+- **Read-Only / Non-Mutating**: No code execution, script evaluation, asset import/refresh, preflight compilation, scene manipulation, or custom batch actions are permitted.
+- **Explicit User Direction Only**: Instance binding requires an exact, explicit user selection (`ProjectName@hash`). Automatic routing and speculative project switching are strictly prohibited.
+- **Ephemerality**: Active session IDs, instance lists, and bound editor state reside exclusively in volatile memory (`McpSessionManager`); no runtime session identifiers or inventory caches are ever persisted to disk.
+
+## Protocol Negotiation & Transport Model
+
+### Initialization Handshake
+1. **Approval Verification**: Connection is initiated exclusively via `connect_approved_mcp_endpoint`. The target endpoint URL is canonicalized and verified against `WorkspaceSettings.approved_mcp_endpoints`. Connecting to unapproved or non-loopback endpoints is rejected immediately.
+2. **Initialize JSON-RPC Request**:
+   - Method: `initialize`
+   - Params: Client info `{ "name": "yuki", "version": "0.1.0" }`, capabilities `{ "roots": { "listChanged": false } }`, protocol version `2025-11-25`.
+   - Supported protocol versions: `2025-11-25`, `2024-11-05`. If the server responds with an unsupported version, connection fails honestly.
+3. **Initialized Notification**:
+   - Client sends JSON-RPC notification `notifications/initialized` with empty params upon receiving a successful initialize result.
+4. **Negotiated Headers**:
+   - `mcp-protocol-version`: Negotiated protocol version string attached to every subsequent POST request and notification.
+   - `mcp-session-id`: Attached to subsequent requests when assigned by the server (e.g. FastMCP session cookie/header).
+
+### Dual Response Transport: Plain JSON and Streaming SSE
+The client supports two HTTP response patterns transparently:
+- **Direct JSON (`application/json`)**: Standard JSON-RPC response payload parsed directly.
+- **Server-Sent Events (`text/event-stream`)**: The server streams events. Frames are parsed (`event: message`, `data: { ... }`) and the matching JSON-RPC response is extracted via `extract_jsonrpc_from_sse`.
+- **UTF-8 Chunk Boundaries**: The SSE byte reader maintains an internal chunk buffer across stream boundaries to prevent panics or corruption on multi-byte UTF-8 character splits.
+
+## Instance Inventory & User-Directed Binding
+
+In the CoplayDev/unity-mcp multi-instance architecture, multiple Unity editor instances register with a single local HTTP server.
+
+### Instance Listing
+- Calling `list_connected_unity_instances(session_id)` queries `mcpforunity://instances` via JSON-RPC `resources/read`.
+- Instances are represented as `UnityInstanceInfo` containing:
+  - `name`: Human-readable project/editor name.
+  - `exact_id`: Exact unique instance identifier (`Name@hash`, e.g. `MyProject@a1b2c3d4`).
+  - `is_active`: Flag indicating server-side active instance.
+- If no instances are currently connected, an empty list is returned.
+
+### Exact User-Directed Bind
+- Calling `bind_unity_instance(session_id, exact_id)` invokes `tools/call` for `set_active_instance` passing `{"instance_id": exact_id}`.
+- Both `exact_id` and legacy `instance_id` parameters are accepted.
+- Binds are verified by querying `mcpforunity://editor/state` (or `project/info`) to obtain current editor status and reported project root.
+
+## Local Canonical Project Root Verification
+
+### Pinned Research Finding
+As established in integration research on CoplayDev/unity-mcp `v10.3.0`, HTTP instance resource listings (`mcpforunity://instances`) **do not provide `projectRoot`** (unlike stdio transport). Project identity cannot be inferred from project name alone.
+
+### Local Verification Pipeline
+1. Upon binding or querying state via `get_bound_unity_state`, Yuki queries `mcpforunity://editor/state` to obtain the reported `project_path`.
+2. The reported path is canonicalized locally on disk using standard filesystem path resolution.
+3. The canonical path is tested against approved workspace project roots in `WorkspaceSettings.project_roots`.
+4. Verification outcomes:
+   - `Verified`: The reported path matches or is contained within an approved workspace project root.
+   - `UnverifiedPath`: The reported path does not exist on local disk or cannot be accessed.
+   - `NotApprovedProject`: The project path exists on disk but is not in the approved workspace roots list.
+5. **Non-Cryptographic Authentication Notice**: Local disk presence and loopback network reachability verify filesystem location and listener presence only; they do **not** constitute cryptographic authentication of editor identity.
+
+## Invalidation, Revocation & 404 Rebind Semantics
+
+### Session 404 Terminal Rebind
+- If the server restarts or FastMCP expires a session, subsequent requests return HTTP 404 (`SESSION_404:`).
+- Yuki treats HTTP 404 as terminal for that session: the session is immediately marked expired and removed from memory.
+- Automatic retry, reconnect, or request replay is strictly prohibited. The user or frontend must explicitly initiate a new connection and re-bind the instance.
+
+### Grant Revocation
+- Revoking an endpoint grant via `revoke_mcp_endpoint` automatically invalidates and removes all active sessions connected to that canonical endpoint (`invalidate_endpoint_sessions`).
+
+### Explicit Disconnection
+- Calling `disconnect(session_id)` (or `disconnect_mcp_session`) gracefully invalidates and purges the session from memory.
+
+## Safety Boundaries & Resource Bounding
+
+- **Active Session Limit**: Maximum 5 concurrent sessions (`MAX_ACTIVE_MCP_SESSIONS`). Exceeding this limit returns an honest error requiring disconnection of unused sessions.
+- **Response Size Limit**: Responses are capped at 1 MiB (`MAX_MCP_RESPONSE_BYTES = 1,048,576`). Oversized JSON or SSE streams are truncated and rejected.
+- **Bounded Timeouts**:
+  - Request timeout: 5000 ms (`MCP_REQUEST_TIMEOUT_MS`).
+  - Probe timeout: 1500 ms (`MCP_PROBE_TIMEOUT_MS`).
+- **No HTTP Redirects**: All HTTP clients enforce `reqwest::redirect::Policy::none()`.
+- **Sanitized Errors**: Network errors and internal parse details are sanitized before exposure to IPC callers.
+
+## Native Session Tauri Commands Contract
+
+| Command | Parameters | Return Type | Description |
+|---|---|---|---|
+| `connect_approved_mcp_endpoint` | `endpoint: String` | `McpConnectionResult` | Verifies grant, performs `initialize` handshake, sends `initialized`, returns session ID and negotiated version. |
+| `list_connected_unity_instances` | `session_id: String` | `Vec<UnityInstanceInfo>` | Queries `mcpforunity://instances` and returns explicit `Name@hash` instances. |
+| `bind_unity_instance` | `session_id: String`, `exact_id: String` | `BoundUnityState` | Calls `set_active_instance`, queries editor state, verifies project root locally, and updates session state. |
+| `get_bound_unity_state` | `session_id: String` | `BoundUnityState` | Returns current bound instance, editor state, and local project root verification status. |
+| `disconnect` | `session_id: String` | `McpDisconnectResult` | Invalidates and purges the session from active memory. |
+| `disconnect_mcp_session` | `session_id: String` | `McpDisconnectResult` | Compatibility alias for `disconnect`. |

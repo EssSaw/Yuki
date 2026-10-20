@@ -1,5 +1,23 @@
 # Current handoff
 
+## Notebook redesign and local MCP sessions (2026-10-20)
+
+User reports Notes functionality works, rejected its initial appearance, and requested
+notebook styling. Hard UI implemented ruled ivory paper, binding/page cues, numbered
+index and readable editor without changing save protections. Visual acceptance pending.
+MCP native session layer and Settings controls now support explicit approved-endpoint
+Connect, exact editor selection/binding, canonical approved-project verification, local
+state refresh and Disconnect. No model-facing Unity tools or provider sharing through
+MCP are implemented. Live Unity remains untested. Failed first native worker was resumed
+from partial files; UI retry completed with Hard UI explicitly selected.
+Validation: native suite passed (147 tests reported by native worker and independently
+rerun), all 88 frontend tests passed, frontend and Windows native release builds passed,
+diff formatting passed. No live MCP/private-data tests or rendered narrow-width review.
+Next acceptance: approve/connect local running CoplayDev endpoint, select exact editor,
+verify project/state, disconnect/revoke; then define narrow model-facing editor-state read.
+Unrelated target/ preserved. Publish focused commits without attribution trailers.
+
+
 ## Notes and MCP discovery integrated (2026-10-20)
 
 First local Notes editor/storage and MCP candidate discovery/approval Settings are

@@ -97,3 +97,93 @@ pub struct McpGrantResult {
     pub is_approved: bool,
     pub approved_endpoints: Vec<McpEndpointGrant>,
 }
+
+/// Supported MCP protocol versions in order of negotiation preference.
+pub const SUPPORTED_MCP_PROTOCOL_VERSIONS: &[&str] = &["2024-11-05", "2025-11-25"];
+
+/// Default client MCP protocol version to propose.
+pub const DEFAULT_MCP_PROTOCOL_VERSION: &str = "2024-11-05";
+
+/// Maximum number of concurrent active MCP sessions in memory.
+pub const MAX_ACTIVE_MCP_SESSIONS: usize = 5;
+
+/// MCP request timeout in milliseconds (5 seconds).
+pub const MCP_REQUEST_TIMEOUT_MS: u64 = 5000;
+
+/// Maximum allowed HTTP response size for MCP requests (1 MiB).
+pub const MAX_MCP_RESPONSE_BYTES: usize = 1024 * 1024;
+
+/// Connection result returned to UI after successfully initializing an approved MCP endpoint.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct McpConnectionResult {
+    pub session_id: String,
+    pub endpoint_url: String,
+    pub protocol_version: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub server_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub server_version: Option<String>,
+}
+
+/// Information about a connected Unity editor instance discovered via `mcpforunity://instances`.
+/// Identified strictly by exact `Name@hash`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct UnityInstanceInfo {
+    pub id: String,
+    pub name: String,
+    pub hash: String,
+    #[serde(default)]
+    pub is_active: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub port: Option<u16>,
+}
+
+/// Local verification status of the bound Unity instance project root.
+/// Project root must canonicalize and match an approved workspace project root.
+/// Cannot be inferred from project name alone.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum UnityProjectVerificationStatus {
+    Verified {
+        canonical_root: String,
+        matched_approved_root: String,
+        provider_sharing_enabled: bool,
+    },
+    Mismatched {
+        reported_root: String,
+        reason: String,
+    },
+    Unverifiable {
+        reason: String,
+    },
+}
+
+/// Sanitized bound Unity editor state returned to local UI.
+/// Never forwarded to external AI providers.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct BoundUnityState {
+    pub session_id: String,
+    pub bound_instance_id: String,
+    pub endpoint_url: String,
+    pub is_playing: bool,
+    pub is_paused: bool,
+    pub is_compiling: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unity_version: Option<String>,
+    pub project_verification: UnityProjectVerificationStatus,
+    pub provider_sharing_eligible: bool,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub warnings: Vec<String>,
+}
+
+/// Sanitized result of disconnecting an MCP session.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct McpDisconnectResult {
+    pub session_id: String,
+    pub success: bool,
+    pub message: String,
+}

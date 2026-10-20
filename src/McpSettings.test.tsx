@@ -100,3 +100,113 @@ it("ignores stale lifecycle responses and late unmounted results", async () => {
   await act(async () => { finish(inventory); });
   await waitFor(() => expect(screen.queryByText("Local candidate")).toBeNull());
 });
+
+const connected = { sessionId: "session-1", endpointUrl: endpoint, protocolVersion: "2024-11-05" };
+const bound = { ...connected, boundInstanceId: "Example@abc", isPlaying: false, isPaused: false, isCompiling: false, projectVerification: { type: "verified", canonical_root: "E:\\Example", matched_approved_root: "E:\\Example", provider_sharing_enabled: false }, providerSharingEligible: false };
+function sessionMock() {
+  vi.mocked(invoke).mockImplementation(async (command) => {
+    if (command === "get_mcp_grants") { return [grant]; }
+    if (command === "connect_approved_mcp_endpoint") { return connected; }
+    if (command === "list_connected_unity_instances") { return [{ id: "Example@abc", name: "Example", hash: "abc", isActive: true }]; }
+    if (command === "bind_unity_instance" || command === "get_bound_unity_state") { return bound; }
+    if (command === "disconnect_mcp_session") { return { success: true }; }
+    if (command === "revoke_mcp_endpoint") { return { canonicalUrl: endpoint, isApproved: false, approvedEndpoints: [] }; }
+    return inventory;
+  });
+}
+async function openSession() {
+  await userEvent.click(await screen.findByRole("button", { name: "Connect approved endpoint" }));
+  await screen.findByRole("option", { name: "Example@abc (server active)" });
+}
+async function bindSession() {
+  await userEvent.selectOptions(screen.getByLabelText("Exact Unity instance"), "Example@abc");
+  await userEvent.click(screen.getByRole("button", { name: "Bind selected editor" }));
+  await screen.findByText("Verified approved project");
+}
+it("connects only explicitly, requires exact selection, binds and refreshes local state", async () => {
+  sessionMock(); render(<McpSettings />);
+  await screen.findByRole("button", { name: "Connect approved endpoint" });
+  expect(invoke).not.toHaveBeenCalledWith("connect_approved_mcp_endpoint", expect.anything());
+  await openSession();
+  expect(screen.getByRole("button", { name: "Bind selected editor" })).toHaveProperty("disabled", true);
+  expect(invoke).not.toHaveBeenCalledWith("bind_unity_instance", expect.anything());
+  await bindSession();
+  expect(invoke).toHaveBeenCalledWith("bind_unity_instance", { sessionId: "session-1", exactId: "Example@abc" });
+  expect(screen.getAllByText("E:\\Example")).toHaveLength(2);
+  await userEvent.click(screen.getByRole("button", { name: "Refresh editor state" }));
+  await screen.findByText("Verified approved project");
+  expect(invoke).toHaveBeenCalledWith("get_bound_unity_state", { sessionId: "session-1" });
+  await userEvent.click(screen.getByRole("button", { name: "Disconnect" }));
+  expect(screen.queryByText("Verified approved project")).toBeNull();
+  expect(invoke).toHaveBeenCalledWith("disconnect_mcp_session", { sessionId: "session-1" });
+});
+it("reports connect failure without a binding", async () => {
+  sessionMock(); render(<McpSettings />);
+  await screen.findByRole("button", { name: "Connect approved endpoint" });
+  vi.mocked(invoke).mockRejectedValueOnce("initialize rejected");
+  await userEvent.click(screen.getByRole("button", { name: "Connect approved endpoint" }));
+  expect((await screen.findByRole("alert")).textContent).toContain("initialize rejected");
+  expect(screen.queryByLabelText("Exact Unity instance")).toBeNull();
+});
+it("clears binding on native session 404 without reconnecting automatically", async () => {
+  sessionMock(); render(<McpSettings />); await openSession(); await bindSession();
+  vi.mocked(invoke).mockRejectedValueOnce("Session expired: HTTP 404");
+  await userEvent.click(screen.getByRole("button", { name: "Refresh editor state" }));
+  expect((await screen.findByRole("alert")).textContent).toContain("404");
+  expect(screen.queryByText("Verified approved project")).toBeNull();
+  expect(vi.mocked(invoke).mock.calls.filter(([name]) => name === "connect_approved_mcp_endpoint")).toHaveLength(1);
+});
+it("revocation clears binding even when saving the grant fails", async () => {
+  sessionMock(); render(<McpSettings />); await openSession(); await bindSession();
+  await userEvent.click(screen.getByRole("button", { name: "Revoke saved grant" }));
+  const original = vi.mocked(invoke).getMockImplementation()!;
+  vi.mocked(invoke).mockImplementation((command, args) => command === "revoke_mcp_endpoint" ? Promise.reject("disk busy") : original(command, args));
+  await userEvent.click(screen.getByRole("button", { name: "Confirm revoke" }));
+  await screen.findByRole("alert");
+  expect(screen.queryByText("Verified approved project")).toBeNull();
+  expect(screen.getByText("Approved")).toBeTruthy();
+});
+it("ignores a late bind after disconnect", async () => {
+  sessionMock(); render(<McpSettings />); await openSession();
+  let finish!: (value: typeof bound) => void;
+  vi.mocked(invoke).mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+  await userEvent.selectOptions(screen.getByLabelText("Exact Unity instance"), "Example@abc");
+  await userEvent.click(screen.getByRole("button", { name: "Bind selected editor" }));
+  await userEvent.click(screen.getByRole("button", { name: "Disconnect" }));
+  await act(async () => { finish(bound); });
+  expect(screen.queryByText("Verified approved project")).toBeNull();
+});
+it("disconnects a connection that completes after unmount", async () => {
+  sessionMock(); const view = render(<McpSettings />);
+  await screen.findByRole("button", { name: "Connect approved endpoint" });
+  let finish!: (value: typeof connected) => void;
+  vi.mocked(invoke).mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+  await userEvent.click(screen.getByRole("button", { name: "Connect approved endpoint" }));
+  view.unmount();
+  await act(async () => { finish(connected); });
+  expect(invoke).toHaveBeenCalledWith("disconnect_mcp_session", { sessionId: "session-1" });
+  expect(invoke).not.toHaveBeenCalledWith("list_connected_unity_instances", expect.anything());
+});
+it("closes an established session on unmount", async () => {
+  sessionMock(); const view = render(<StrictMode><McpSettings /></StrictMode>);
+  await openSession(); view.unmount();
+  expect(invoke).toHaveBeenCalledWith("disconnect_mcp_session", { sessionId: "session-1" });
+});
+it("displays native mismatch instead of inferring verification from the instance name", async () => {
+  sessionMock(); render(<McpSettings />); await openSession();
+  vi.mocked(invoke).mockResolvedValueOnce({ ...bound, projectVerification: { type: "mismatched", reported_root: "E:\\Other", reason: "Not an approved root" } });
+  await userEvent.selectOptions(screen.getByLabelText("Exact Unity instance"), "Example@abc");
+  await userEvent.click(screen.getByRole("button", { name: "Bind selected editor" }));
+  await screen.findByText("Project mismatch");
+  expect(screen.getByText("Not an approved root")).toBeTruthy();
+  expect(screen.queryByText("Verified approved project")).toBeNull();
+});
+it("clears an unsuccessful bind and disconnects its session", async () => {
+  sessionMock(); render(<McpSettings />); await openSession();
+  vi.mocked(invoke).mockRejectedValueOnce("Exact instance not found");
+  await userEvent.selectOptions(screen.getByLabelText("Exact Unity instance"), "Example@abc");
+  await userEvent.click(screen.getByRole("button", { name: "Bind selected editor" }));
+  expect((await screen.findByRole("alert")).textContent).toContain("Exact instance not found");
+  expect(screen.queryByLabelText("Exact Unity instance")).toBeNull();
+  expect(invoke).toHaveBeenCalledWith("disconnect_mcp_session", { sessionId: "session-1" });
+});

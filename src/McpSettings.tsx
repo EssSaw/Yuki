@@ -20,6 +20,21 @@ type Grant = { canonicalUrl: string; approvedAt: string };
 export type McpDiscoveryResult = { candidates: McpCandidate[]; scannedRoots: string[]; configsInspected: string[]; warnings?: string[] };
 type GrantResult = { canonicalUrl: string; isApproved: boolean; approvedEndpoints: Grant[] };
 type Confirmation = { endpoint: string; revoke: boolean };
+type Connection = { sessionId: string; endpointUrl: string; protocolVersion: string; serverName?: string; serverVersion?: string };
+type Instance = { id: string; name: string; hash: string; isActive: boolean; port?: number };
+type EditorState = {
+  sessionId: string; boundInstanceId: string; endpointUrl: string;
+  isPlaying: boolean; isPaused: boolean; isCompiling: boolean; unityVersion?: string;
+  projectVerification:
+    | { type: "verified"; canonical_root: string; matched_approved_root: string; provider_sharing_enabled: boolean }
+    | { type: "mismatched"; reported_root: string; reason: string }
+    | { type: "unverifiable"; reason: string };
+  providerSharingEligible: boolean; warnings?: string[];
+};
+
+async function closeSession(sessionId: string) {
+  await invoke("disconnect_mcp_session", { sessionId });
+}
 
 function validateInventory(result: McpDiscoveryResult, grants: Grant[]) {
   if (!result || !Array.isArray(result.candidates) || !Array.isArray(result.scannedRoots) || !Array.isArray(result.configsInspected) || !Array.isArray(grants)) {
@@ -48,6 +63,105 @@ export default function McpSettings() {
   const generation = useRef(0);
   const mutation = useRef(false);
   const confirmButton = useRef<HTMLButtonElement>(null);
+  const [connection, setConnection] = useState<Connection | null>(null);
+  const [instances, setInstances] = useState<Instance[]>([]);
+  const [selected, setSelected] = useState("");
+  const [editor, setEditor] = useState<EditorState | null>(null);
+  const session = useRef<Connection | null>(null);
+  const sessionGeneration = useRef(0);
+  const sessionBusy = useRef(false);
+  const [sessionPending, setSessionPending] = useState(false);
+
+  useEffect(() => () => {
+    ++sessionGeneration.current;
+    const current = session.current;
+    session.current = null;
+    if (current) { void closeSession(current.sessionId).catch(() => {}); }
+  }, []);
+
+  function clearSession() {
+    ++sessionGeneration.current;
+    session.current = null;
+    sessionBusy.current = false;
+    setSessionPending(false);
+    setConnection(null);
+    setInstances([]);
+    setSelected("");
+    setEditor(null);
+  }
+
+  async function disconnect() {
+    const current = session.current;
+    clearSession();
+    const request = sessionGeneration.current;
+    if (!current) { return; }
+    try {
+      await closeSession(current.sessionId);
+    } catch (cause) {
+      if (request === sessionGeneration.current) {
+        setError(`Disconnect failed; local binding cleared. ${String(cause)}`);
+      }
+    }
+  }
+
+  async function connect(endpoint: string) {
+    if (!desktop || sessionBusy.current || session.current || confirmation) { return; }
+    const request = ++sessionGeneration.current;
+    sessionBusy.current = true;
+    setSessionPending(true);
+    setError("");
+    setMessage("");
+    let opened: Connection | null = null;
+    try {
+      opened = await invoke<Connection>("connect_approved_mcp_endpoint", { endpoint });
+      if (request !== sessionGeneration.current) {
+        await closeSession(opened.sessionId);
+        return;
+      }
+      session.current = opened;
+      setConnection(opened);
+      const found = await invoke<Instance[]>("list_connected_unity_instances", { sessionId: opened.sessionId });
+      if (request !== sessionGeneration.current) { return; }
+      setInstances(found);
+    } catch (cause) {
+      if (request !== sessionGeneration.current) { return; }
+      clearSession();
+      setError(`Connection failed. ${String(cause)}`);
+      if (opened) { await closeSession(opened.sessionId).catch(() => {}); }
+    } finally {
+      if (request === sessionGeneration.current) {
+        sessionBusy.current = false;
+        setSessionPending(false);
+      }
+    }
+  }
+
+  async function inspect(bind: boolean) {
+    const current = session.current;
+    if (!desktop || !current || sessionBusy.current || (bind && !selected)) { return; }
+    const request = ++sessionGeneration.current;
+    sessionBusy.current = true;
+    setSessionPending(true);
+    setEditor(null);
+    setError("");
+    try {
+      const state = await invoke<EditorState>(bind ? "bind_unity_instance" : "get_bound_unity_state", {
+        sessionId: current.sessionId, ...(bind ? { exactId: selected } : {}),
+      });
+      if (request !== sessionGeneration.current) { return; }
+      setEditor(state);
+    } catch (cause) {
+      if (request !== sessionGeneration.current) { return; }
+      clearSession();
+      setError(`Editor inspection failed; binding cleared. Reconnect explicitly to retry. ${String(cause)}`);
+      await closeSession(current.sessionId).catch(() => {});
+    } finally {
+      if (request === sessionGeneration.current) {
+        sessionBusy.current = false;
+        setSessionPending(false);
+      }
+    }
+  }
 
   useEffect(() => {
     const request = ++generation.current;
@@ -104,12 +218,17 @@ export default function McpSettings() {
     setBusy("Saving endpoint permission...");
     setError("");
     setMessage("");
+    if (action.revoke && session.current?.endpointUrl === action.endpoint) {
+      const current = session.current;
+      clearSession();
+      void closeSession(current.sessionId).catch(() => {});
+    }
     try {
       const saved = await invoke<GrantResult>(action.revoke ? "revoke_mcp_endpoint" : "approve_mcp_endpoint", { endpoint: action.endpoint });
       if (request !== generation.current) { return; }
       setGrants(saved.approvedEndpoints);
       setConfirmation(null);
-      setMessage(`${saved.canonicalUrl}: first-connection grant ${saved.isApproved ? "approved" : "revoked"}. No MCP connection was opened.`);
+      setMessage(`${saved.canonicalUrl}: first-connection grant ${saved.isApproved ? "approved" : "revoked"}.`);
     } catch (cause) {
       if (request === generation.current) { setError(`Permission change failed. Displayed grants are unchanged. ${String(cause)}`); }
     } finally {
@@ -127,11 +246,43 @@ export default function McpSettings() {
   return (
     <section className="mcp-settings" aria-labelledby="mcp-settings-title">
       <h2 id="mcp-settings-title">Local Unity MCP</h2>
-      <p>Find local endpoint candidates, then choose which may receive a future first connection. Discovery checks HTTP availability only; it does not connect to or initialize Unity, select an editor, or access tools.</p>
-      <p className="mcp-boundary">Endpoint approval does not enable provider sharing or send project content to a provider. Server identity and project-to-editor binding remain <strong>UNVERIFIED</strong>.</p>
+      <p>Discover local endpoints, approve an exact address, then explicitly connect and choose a Unity editor. Discovery checks HTTP availability only.</p>
+      <p className="mcp-boundary">Local inspection only. These controls do not expose Unity to chat or AI tools. Project verification comes from the native approved-root check, not an editor name.</p>
+      <section className="mcp-session" aria-labelledby="mcp-session-title">
+        <div className="mcp-actions"><h3 id="mcp-session-title">Editor session</h3>{connection && <button type="button" onClick={disconnect}>Disconnect</button>}</div>
+        {!connection && <p>No editor connected. Choose Connect approved endpoint from a saved grant.</p>}
+        {sessionPending && <p role="status">Waiting for local MCP response...</p>}
+        {connection && <>
+          <code>{connection.endpointUrl}</code>
+          <p className="mcp-session-meta">Protocol {connection.protocolVersion}{connection.serverName ? ` / ${connection.serverName}` : ""}{connection.serverVersion ? ` ${connection.serverVersion}` : ""} (server-reported)</p>
+          <label htmlFor="mcp-instance">Exact Unity instance</label>
+          <div className="mcp-actions">
+            <select id="mcp-instance" value={selected} disabled={sessionPending || !!confirmation} onChange={(event) => setSelected(event.target.value)}>
+              <option value="">Choose an editor...</option>
+              {instances.map((instance) => <option key={instance.id} value={instance.id}>{instance.id}{instance.isActive ? " (server active)" : ""}</option>)}
+            </select>
+            <button type="button" disabled={sessionPending || !selected || !!confirmation} onClick={() => inspect(true)}>Bind selected editor</button>
+          </div>
+          {!sessionPending && instances.length === 0 && <p>No Unity instances returned. Disconnect and reconnect to reload the instance list.</p>}
+          {editor && <div className="mcp-editor-state">
+            <div className="mcp-actions"><h4>Local editor state</h4><button type="button" disabled={sessionPending || !!confirmation} onClick={() => inspect(false)}>Refresh editor state</button></div>
+            <dl>
+              <dt>Bound instance</dt><dd>{editor.boundInstanceId}</dd>
+              <dt>Unity version</dt><dd>{editor.unityVersion || "Not reported"}</dd>
+              <dt>Editor</dt><dd>{editor.isPlaying ? "Playing" : "Not playing"} / {editor.isPaused ? "Paused" : "Not paused"} / {editor.isCompiling ? "Compiling" : "Not compiling"}</dd>
+              <dt>Project verification</dt><dd>{editor.projectVerification.type === "verified" ? "Verified approved project" : editor.projectVerification.type === "mismatched" ? "Project mismatch" : "Project unverifiable"}</dd>
+              {editor.projectVerification.type === "verified" ? <>
+                <dt>Canonical root</dt><dd>{editor.projectVerification.canonical_root}</dd>
+                <dt>Approved root</dt><dd>{editor.projectVerification.matched_approved_root}</dd>
+              </> : <><dt>Reason</dt><dd>{editor.projectVerification.reason}</dd>{editor.projectVerification.type === "mismatched" && <><dt>Reported root</dt><dd>{editor.projectVerification.reported_root}</dd></>}</>}
+            </dl>
+            {editor.warnings?.map((warning, index) => <p className="mcp-warning" key={index}>{warning}</p>)}
+          </div>}
+        </>}
+      </section>
       {!desktop && <p role="status">Browser preview is inert. Open the desktop app to list, discover, or approve local endpoints.</p>}
       <div className="mcp-actions">
-        <button type="button" onClick={discover} disabled={!desktop || !!busy || !!confirmation}>Discover local endpoints</button>
+        <button type="button" onClick={discover} disabled={!desktop || !!busy || sessionPending || !!confirmation}>Discover local endpoints</button>
         <span>Explicitly sends bounded HTTP GET probes to supported loopback candidates.</span>
       </div>
       {busy && <p role="status">{busy}</p>}
@@ -141,7 +292,7 @@ export default function McpSettings() {
         <div className="mcp-confirmation" role="group" aria-labelledby="mcp-confirm-title">
           <h3 id="mcp-confirm-title">{confirmation.revoke ? "Revoke" : "Approve"} this endpoint's first-connection grant?</h3>
           <code>{confirmation.endpoint}</code>
-          <p>This changes only a saved local permission for this exact URL, port and path. It does not open an MCP session, initialize Unity, select an editor, grant tool access, or enable provider sharing.</p>
+          <p>This changes only a saved local permission for this exact URL, port and path. Approval does not open a session or select an editor. Revocation invalidates sessions for this endpoint, even if saving the permission change fails.</p>
           <div className="mcp-actions">
             <button ref={confirmButton} type="button" disabled={!!busy} onClick={confirm}>{confirmation.revoke ? "Confirm revoke" : "Confirm approval"}</button>
             <button type="button" disabled={!!busy} onClick={() => setConfirmation(null)}>Cancel</button>
@@ -167,7 +318,7 @@ export default function McpSettings() {
                 <dt>First-connection grant</dt><dd>{approved ? "Approved" : "Not approved"}</dd>
               </dl>
               {candidate.warnings?.map((warning, i) => <p key={i}>{warning}</p>)}
-              {candidate.supported && candidate.endpointUrl && <button type="button" disabled={!desktop || !!busy || !!confirmation} onClick={() => requestChange(candidate.endpointUrl!, approved)}>{approved ? "Revoke endpoint approval" : "Review endpoint approval"}</button>}
+              {candidate.supported && candidate.endpointUrl && <button type="button" disabled={!desktop || !!busy || sessionPending || !!confirmation} onClick={() => requestChange(candidate.endpointUrl!, approved)}>{approved ? "Revoke endpoint approval" : "Review endpoint approval"}</button>}
             </li>;
           })}
         </ul>
@@ -176,7 +327,7 @@ export default function McpSettings() {
       {grants.length > 0 && <>
         <h3>Saved first-connection grants</h3>
         <p>Saved permissions remain visible here even when a configuration no longer lists the endpoint.</p>
-        <ul className="mcp-grants">{grants.map((grant) => <li key={grant.canonicalUrl}><code>{grant.canonicalUrl}</code><span>Approved at {grant.approvedAt}</span><button type="button" disabled={!desktop || !!busy || !!confirmation} onClick={() => requestChange(grant.canonicalUrl, true)}>Revoke saved grant</button></li>)}</ul>
+        <ul className="mcp-grants">{grants.map((grant) => <li key={grant.canonicalUrl}><code>{grant.canonicalUrl}</code><span>Approved at {grant.approvedAt}</span><div className="mcp-actions"><button type="button" disabled={!desktop || !!busy || sessionPending || !!connection || !!confirmation} onClick={() => connect(grant.canonicalUrl)}>Connect approved endpoint</button><button type="button" disabled={!desktop || !!busy || sessionPending || !!confirmation} onClick={() => requestChange(grant.canonicalUrl, true)}>Revoke saved grant</button></div></li>)}</ul>
       </>}
     </section>
   );

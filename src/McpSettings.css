@@ -35,3 +35,10 @@
   .mcp-settings dd { margin-bottom: 10px; }
   .mcp-actions button { width: 100%; }
 }
+.mcp-session { margin: 20px 0; padding: 16px 0; border-block: 1px solid var(--line); }
+.mcp-session h3, .mcp-session h4 { margin: 0; flex: 1; }
+.mcp-session label { display: block; margin: 16px 0 6px; font-weight: 600; }
+.mcp-session select { flex: 1 1 200px; min-width: 0; max-width: 100%; min-height: 40px; padding: 8px; color: var(--ink); background: var(--muted-blue-wash); border: 1px solid var(--muted-blue-border); border-radius: 8px; font: inherit; }
+.mcp-session select:focus-visible { outline: 2px solid var(--muted-blue-ink); outline-offset: 3px; }
+.mcp-session-meta { color: var(--muted); font-size: var(--text-secondary); }
+.mcp-editor-state { margin-top: 20px; }
