@@ -1,4 +1,6 @@
 pub mod chat;
+pub mod mcp;
+pub mod notes;
 pub mod workspace;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -16,6 +18,10 @@ pub fn run() {
             workspace::commands::set_project_provider_sharing,
             workspace::commands::list_project_directory,
             workspace::commands::read_local_file_chunk,
+            notes::commands::create_note,
+            notes::commands::list_notes,
+            notes::commands::load_note,
+            notes::commands::save_note,
             chat::commands::get_chat_settings,
             chat::commands::save_chat_settings,
             chat::commands::list_chat_models,
@@ -24,6 +30,11 @@ pub fn run() {
             chat::commands::delete_conversation,
             chat::commands::start_chat,
             chat::commands::cancel_chat,
+            mcp::commands::list_mcp_candidates,
+            mcp::commands::discover_mcp_candidates,
+            mcp::commands::approve_mcp_endpoint,
+            mcp::commands::revoke_mcp_endpoint,
+            mcp::commands::get_mcp_grants,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Yuki");

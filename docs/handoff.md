@@ -1,5 +1,36 @@
 # Current handoff
 
+## Notes and MCP discovery integrated (2026-10-20)
+
+First local Notes editor/storage and MCP candidate discovery/approval Settings are
+integrated. Notes: UUID records with Markdown body, explicit Save/Ctrl+S, title rename,
+optimistic conflict detection, recovery candidates, Save/Discard/Cancel navigation and
+native-close interception. No canvas/sync/delete/AI editing/sharing. Notes data is internal
+versioned JSON, not interoperable standalone .md files. See architecture/notes.md.
+MCP: fixed approved-project configs plus documented loopback candidate, explicit bounded
+HTTP probing, persisted endpoint approval/revocation. No MCP initialize, editor binding
+or Unity tools connected yet. See architecture/unity-mcp.md and research/integrations.md.
+Parent fixed canonical note UUID validation, removed unused test imports and updated
+MCP command fixtures in app tests. All 129 native and 79 frontend tests passed, frontend
+production and Windows release builds passed. No native/manual Notes-close, recovery,
+MCP live-endpoint or rendered desktop/narrow acceptance performed. No installs or real
+provider/private-content tests. Publish focused integration with no attribution trailers;
+retain unrelated target/. Next: manual Notes acceptance and MCP session/identity layer.
+
+
+## Parallel tracks approved (2026-10-20)
+
+User accepts current search provisionally: finds results, but search strategy/result
+quality remain known follow-up debt. Search published as 24bfafd. Active MCP discovery
+foundation (Coding) and version-specific connection/allowlist research (Research) have
+separate ownership. User also approved first local Notes slice in parallel: create/open/
+rename/edit Markdown notes under selected data root, explicit Save/Ctrl+S, visible
+Unsaved/Saved/Failed state, Save/Discard/Cancel navigation protection; failed saves retain
+drafts. No canvas/sync/plugins/AI note editing or sharing. Notes research started before
+native persistence implementation. UI uses Hard UI after contract stabilizes; avoid
+shared lib.rs/App.tsx edits concurrently with MCP integration. Parent owns this handoff.
+
+
 ## Search integration checkpoint (2026-10-20)
 
 Implemented search_project_files (glob/literal filename matching) and

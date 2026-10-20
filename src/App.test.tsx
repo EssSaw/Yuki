@@ -55,7 +55,7 @@ describe("desktop foundation", () => {
     for (const section of ["Projects", "Notes & canvas", "Schedule", "Settings"]) {
       await user.click(screen.getByRole("button", { name: section }));
       expect(screen.getByRole("heading", { name: section })).toBeTruthy();
-      if (section === "Projects" || section === "Settings") {
+      if (section === "Projects" || section === "Settings" || section === "Notes & canvas") {
         expect(screen.getByText(/Browser preview has no filesystem access/)).toBeTruthy();
       } else {
         expect(screen.getByText("Not connected yet")).toBeTruthy();
@@ -95,6 +95,8 @@ describe("9router connection settings", () => {
       if (command === "get_chat_settings") {
         return { baseUrl: "http://localhost:8000/v1", model: "llama-3-8b", hasApiKey: true };
       }
+      if (command === "list_mcp_candidates") { return { candidates: [], scannedRoots: [], configsInspected: [], warnings: [] }; }
+      if (command === "get_mcp_grants") { return []; }
       if (command === "get_workspace_settings") {
         return { dataRoot: "D:\\Yuki", projectRoots: [] };
       }
@@ -127,6 +129,8 @@ describe("9router connection settings", () => {
       if (command === "get_chat_settings") {
         return { baseUrl: "http://localhost:8000/v1", model: "", hasApiKey: false };
       }
+      if (command === "list_mcp_candidates") { return { candidates: [], scannedRoots: [], configsInspected: [], warnings: [] }; }
+      if (command === "get_mcp_grants") { return []; }
       if (command === "get_workspace_settings") {
         return { dataRoot: null, projectRoots: [] };
       }
@@ -154,6 +158,8 @@ describe("9router connection settings", () => {
       if (command === "get_chat_settings") {
         return { baseUrl: "http://localhost:8000/v1", model: "", hasApiKey: false };
       }
+      if (command === "list_mcp_candidates") { return { candidates: [], scannedRoots: [], configsInspected: [], warnings: [] }; }
+      if (command === "get_mcp_grants") { return []; }
       if (command === "get_workspace_settings") {
         return { dataRoot: null, projectRoots: [] };
       }
@@ -180,6 +186,8 @@ describe("9router connection settings", () => {
     let currentSettings = { baseUrl: "http://localhost:8000/v1", model: "llama3", hasApiKey: false };
     vi.mocked(invoke).mockImplementation(async (command, args) => {
       if (command === "get_chat_settings") return currentSettings;
+      if (command === "list_mcp_candidates") return { candidates: [], scannedRoots: [], configsInspected: [], warnings: [] };
+      if (command === "get_mcp_grants") return [];
       if (command === "get_workspace_settings") return { dataRoot: null, projectRoots: [] };
       if (command === "save_chat_settings") {
         const payload = args as { baseUrl: string; model: string; apiKey?: string; clearApiKey?: boolean };
@@ -218,6 +226,8 @@ describe("9router connection settings", () => {
       if (command === "get_chat_settings") {
         return { baseUrl: "http://localhost:8000/v1", model: "llama3", hasApiKey: true };
       }
+      if (command === "list_mcp_candidates") return { candidates: [], scannedRoots: [], configsInspected: [], warnings: [] };
+      if (command === "get_mcp_grants") return [];
       if (command === "get_workspace_settings") return { dataRoot: null, projectRoots: [] };
       if (command === "save_chat_settings") {
         const payload = args as { baseUrl: string; model: string; clearApiKey?: boolean };
@@ -246,6 +256,8 @@ describe("9router connection settings", () => {
       if (command === "get_chat_settings") {
         return { baseUrl: "http://localhost:8000/v1", model: "llama3", hasApiKey: false };
       }
+      if (command === "list_mcp_candidates") return { candidates: [], scannedRoots: [], configsInspected: [], warnings: [] };
+      if (command === "get_mcp_grants") return [];
       if (command === "get_workspace_settings") return { dataRoot: null, projectRoots: [] };
       if (command === "save_chat_settings") {
         throw new Error("Failed to write Windows credential vault");
@@ -293,6 +305,8 @@ describe("chat streaming and request matching", () => {
       if (command === "list_conversations") {
         return [];
       }
+      if (command === "list_mcp_candidates") return { candidates: [], scannedRoots: [], configsInspected: [], warnings: [] };
+      if (command === "get_mcp_grants") return [];
       if (command === "get_workspace_settings") return { dataRoot: null, projectRoots: [] };
       if (command === "start_chat") {
         const payload = args as { conversationId: string | null; content: string; requestId: string };
@@ -368,6 +382,8 @@ describe("chat streaming and request matching", () => {
         return { baseUrl: "http://localhost:8000/v1", model: "gpt-4o", hasApiKey: true };
       }
       if (command === "list_conversations") return [];
+      if (command === "list_mcp_candidates") return { candidates: [], scannedRoots: [], configsInspected: [], warnings: [] };
+      if (command === "get_mcp_grants") return [];
       if (command === "get_workspace_settings") return { dataRoot: null, projectRoots: [] };
       if (command === "start_chat") {
         const p = args as { requestId: string };
@@ -423,6 +439,8 @@ describe("chat streaming and request matching", () => {
         return { baseUrl: "http://localhost:8000/v1", model: "gpt-4o", hasApiKey: true };
       }
       if (command === "list_conversations") return [];
+      if (command === "list_mcp_candidates") return { candidates: [], scannedRoots: [], configsInspected: [], warnings: [] };
+      if (command === "get_mcp_grants") return [];
       if (command === "get_workspace_settings") return { dataRoot: null, projectRoots: [] };
       if (command === "start_chat") {
         startChatCalls++;
@@ -466,6 +484,8 @@ describe("chat cancellation", () => {
         return { baseUrl: "http://localhost:8000/v1", model: "gpt-4o", hasApiKey: true };
       }
       if (command === "list_conversations") return [];
+      if (command === "list_mcp_candidates") return { candidates: [], scannedRoots: [], configsInspected: [], warnings: [] };
+      if (command === "get_mcp_grants") return [];
       if (command === "get_workspace_settings") return { dataRoot: null, projectRoots: [] };
       if (command === "start_chat") {
         const p = args as { requestId: string };
@@ -503,6 +523,8 @@ describe("chat cancellation", () => {
         return { baseUrl: "http://localhost:8000/v1", model: "gpt-4o", hasApiKey: true };
       }
       if (command === "list_conversations") return [];
+      if (command === "list_mcp_candidates") return { candidates: [], scannedRoots: [], configsInspected: [], warnings: [] };
+      if (command === "get_mcp_grants") return [];
       if (command === "get_workspace_settings") return { dataRoot: null, projectRoots: [] };
       if (command === "start_chat") {
         return new Promise(() => {}); // pending
@@ -540,6 +562,8 @@ describe("chat cancellation", () => {
         return { baseUrl: "http://localhost:8000/v1", model: "gpt-4o", hasApiKey: true };
       }
       if (command === "list_conversations") return [];
+      if (command === "list_mcp_candidates") return { candidates: [], scannedRoots: [], configsInspected: [], warnings: [] };
+      if (command === "get_mcp_grants") return [];
       if (command === "get_workspace_settings") return { dataRoot: null, projectRoots: [] };
       if (command === "start_chat") {
         const p = args as { requestId: string };
@@ -579,6 +603,8 @@ describe("failed start and retry", () => {
         return { baseUrl: "http://localhost:8000/v1", model: "gpt-4o", hasApiKey: true };
       }
       if (command === "list_conversations") return [];
+      if (command === "list_mcp_candidates") return { candidates: [], scannedRoots: [], configsInspected: [], warnings: [] };
+      if (command === "get_mcp_grants") return [];
       if (command === "get_workspace_settings") return { dataRoot: null, projectRoots: [] };
       if (command === "start_chat") {
         startCalls++;
@@ -624,6 +650,8 @@ describe("conversation history and reopening", () => {
       if (command === "list_conversations") {
         return [{ id: "conv-1", title: "Game Architecture", updatedAt: "2026-10-19T10:00:00Z" }];
       }
+      if (command === "list_mcp_candidates") return { candidates: [], scannedRoots: [], configsInspected: [], warnings: [] };
+      if (command === "get_mcp_grants") return [];
       if (command === "get_workspace_settings") return { dataRoot: null, projectRoots: [] };
       if (command === "load_conversation") {
         const p = args as { id: string };

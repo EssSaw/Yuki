@@ -1,9 +1,11 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { isTauri } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import "./App.css";
 import ChatPanel from "./ChatPanel";
 import ConnectionSettings from "./ConnectionSettings";
+import McpSettings from "./McpSettings";
+import NotesPanel, { type NotesGuard } from "./NotesPanel";
 import WorkspacePanel from "./WorkspacePanel";
 
 const sections = ["Chat", "Projects", "Notes & canvas", "Schedule", "Settings"] as const;
@@ -72,6 +74,12 @@ function App() {
     }
   }
   const [section, setSection] = useState<Section>("Chat");
+  const notesGuard = useRef<NotesGuard>(null);
+  function navigate(next: Section) {
+    if (next === section) { return; }
+    if (notesGuard.current) { notesGuard.current(() => setSection(next)); }
+    else { setSection(next); }
+  }
   const [themeMode, setThemeMode] = useState<"Auto" | "Technical" | "Creative">("Auto");
   const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() => {
     try {
@@ -127,7 +135,7 @@ function App() {
               aria-current={section === item ? "page" : undefined}
               aria-label={item}
               title={item}
-              onClick={() => setSection(item)}
+              onClick={() => navigate(item)}
               className="nav-item-button"
             >
               <span className="nav-icon" aria-hidden="true">{getSectionIcon(item)}</span>
@@ -171,6 +179,8 @@ function App() {
         </header>
         {section === "Chat" ? (
           <ChatPanel onNavigate={setSection} />
+        ) : section === "Notes & canvas" ? (
+          <NotesPanel guard={notesGuard} />
         ) : section === "Projects" ? (
           <WorkspacePanel key="Projects" section="Projects" />
         ) : section === "Settings" ? (
@@ -199,6 +209,7 @@ function App() {
         </fieldset>
 
             <ConnectionSettings />
+            <McpSettings />
           </div>
         ) : (
           <section className="pending-view" key={section}>

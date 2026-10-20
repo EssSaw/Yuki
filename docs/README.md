@@ -8,6 +8,8 @@ Read selectively; each topic has one authoritative home.
 - [Desktop foundation](architecture/foundation.md): approved stack and first-slice acceptance.
 - [Workspace storage](architecture/workspace-storage.md): implemented folder settings, access boundaries and limits.
 - [Chat integration](architecture/chat.md): 9router slice, privacy boundaries and acceptance.
+- [Local notes](architecture/notes.md): explicit saving, conflict protection and recovery limits.
+- [Unity MCP discovery](architecture/unity-mcp.md): local candidates and endpoint approval, not connected editor tools.
 - [Integration research](research/integrations.md): primary sources and unverified assumptions.
 - [Current handoff](handoff.md): execution state, checks and next action.
 
