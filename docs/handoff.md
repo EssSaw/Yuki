@@ -1,5 +1,17 @@
 # Current handoff
 
+## Latest user feedback and next action (2026-10-20)
+
+Native chat tools are committed/published as 4b1f0fa; final validation was 76 native
+and 46 frontend tests plus frontend/native release builds. User reports sharing
+permissions work. Their broad game-project listing request hit the five-round limit;
+no exhaustive discovery or full manual permission audit is claimed.
+Recorded the requested all-rounder roadmap in [product scope](product/scope.md#all-rounder-assistant-roadmap-2026-10-20).
+These are future capabilities, not blanket implementation/action approval. Recommended
+next slice: bounded project discovery/search, visible tool activity and graceful partial
+results; confirm whether to start this slice before treating the future note as approval.
+Older entries below describe historical intermediate validation and publication state.
+
 ## Native read-only tool-calling loop (2026-10-20)
 
 Implemented the approved native-only read-only tool-calling loop integrated with

@@ -33,6 +33,32 @@ recent context and relevant historical retrieval to support continuity while sta
 focused on the active conversation unless the user redirects it. Exact extraction,
 forgetting and private-chat behavior still need confirmation; perfect recall is not promised.
 
+## All-rounder assistant roadmap (2026-10-20)
+
+User requested recording these capabilities for future implementation, not blanket
+permission to execute them or install integrations:
+
+1. Read-only discovery/search: game-project detection using engine markers, filename
+   and text search with exclusions, bounded traversal and pagination. Preserve folder
+   sharing grants; report partial coverage rather than imply an exhaustive result.
+2. Observable tools: visible running/succeeded/failed activity and useful partial-result
+   handling when a tool budget is reached. Do not simply remove resource limits.
+3. MCP connections: explicitly approved servers, narrow per-integration permissions,
+   and the same native access/sharing enforcement. MCP is not a permission bypass.
+4. Coding actions: previewed patches, builds/tests and Git operations, with separate
+   write/command approval policies before implementation.
+5. Personal workspace tools: notes/canvas, tasks/schedules and memory retrieval, each
+   with confirmed storage, privacy and mutation rules.
+6. Research and app integrations: cited web search/fetch, Unity, browser and selected
+   creative-app tools. External sends, invitations, publishing and deployments require
+   action previews and confirmation unless separately authorized.
+
+Current implementation remains read-only file tools, local previews and explicit
+provider-sharing grants. User reports sharing permission works in the desktop app;
+this is user acceptance feedback, not exhaustive permission-boundary verification.
+A live request to discover game projects hit the five-round tool budget. That is an
+observed discovery/coverage limitation, not evidence that tools are absent.
+
 ## Future direction, not initial commitments
 
 - Collaborative synchronized notes/canvas with friends.
