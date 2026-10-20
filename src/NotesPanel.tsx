@@ -149,16 +149,16 @@ export default function NotesPanel({ guard }: { guard: MutableRefObject<NotesGua
   }
 
   return <section className="notes-panel" aria-label="Local notes">
-    <header className="notes-heading"><div><p className="eyebrow">YOUR LOCAL SKETCHBOOK</p><h1>Notes &amp; canvas</h1><p>Markdown notes, kept on this device. Canvas is not available yet.</p></div>
+    <header className="notes-heading"><div><p className="eyebrow">YOUR LOCAL NOTEBOOK</p><h1>Notes &amp; canvas</h1><p>A quiet place to write. Markdown, kept on this device.</p></div>
       <button type="button" disabled={!native || !ready || busy || !!pending} onClick={() => request(() => { setRecord(null); setDraft({ title: "Untitled note", body: "" }); setError(""); })}>New note</button>
     </header>
     {!native && <p role="status">Browser preview has no filesystem access. Open the desktop app to use notes.</p>}
     <p className="notes-storage">Stored as internal JSON records in your selected data folder, not standalone .md files. No AI sharing or sync.</p>
     <div className="notes-layout">
-      <nav className="notes-list" aria-label="Saved notes"><h2>Saved notes</h2>{notes.length === 0 && <p>No notes to show.</p>}{notes.map((note) => <button type="button" key={note.id} aria-current={record?.id === note.id ? "page" : undefined} disabled={!ready || busy || !!pending} onClick={() => { if (record?.id !== note.id) { request(() => void open(note.id)); } }}>{note.title || "Untitled note"}</button>)}</nav>
+      <nav className="notes-list" aria-label="Saved notes"><div className="notes-index-heading"><h2>Saved notes</h2><span aria-label={`${notes.length} saved notes`}>{String(notes.length).padStart(2, "0")}</span></div>{notes.length === 0 && <p>No notes to show.</p>}{notes.map((note, index) => <button type="button" key={note.id} aria-current={record?.id === note.id ? "page" : undefined} disabled={!ready || busy || !!pending} onClick={() => { if (record?.id !== note.id) { request(() => void open(note.id)); } }}><span className="notes-index-number" aria-hidden="true">{String(index + 1).padStart(2, "0")}</span><span>{note.title || "Untitled note"}</span></button>)}<p className="notes-index-footnote">A personal notebook.<br />Canvas is not available yet.</p></nav>
       <div className="notes-editor">
         {draft ? <>
-          <div className="notes-save"><span role="status">{busy ? "Working..." : error ? "Failed" : dirty ? "Unsaved" : "Saved"}</span><button type="button" disabled={!ready || busy || !dirty || !!pending} onClick={() => void save()}>Save</button><span>Ctrl+S</span></div>
+          <div className="notes-save"><span role="status" data-state={busy ? "working" : error ? "failed" : dirty ? "unsaved" : "saved"}>{busy ? "Working..." : error ? "Failed" : dirty ? "Unsaved" : "Saved"}</span><kbd>Ctrl+S</kbd><button type="button" disabled={!ready || busy || !dirty || !!pending} onClick={() => void save()}>Save</button></div>
           <label htmlFor="note-title">Title</label><input id="note-title" value={draft.title} disabled={!ready || busy || !!pending} onChange={(event) => setDraft({ ...draft, title: event.target.value })} aria-describedby="note-limits" />
           <label htmlFor="note-body">Markdown body</label><textarea id="note-body" value={draft.body} disabled={!ready || busy || !!pending} onChange={(event) => setDraft({ ...draft, body: event.target.value })} spellCheck={false} aria-describedby="note-limits" />
         </> : <div className="notes-empty"><h2>A place for a thought.</h2><p>Open a saved note or start a new one. Nothing is saved until you choose Save.</p></div>}
