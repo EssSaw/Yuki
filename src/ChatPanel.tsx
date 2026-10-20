@@ -26,6 +26,17 @@ export type ConversationDetail = {
   messages: ChatMessage[];
 };
 
+export type ToolActivity = {
+  id: string;
+  name: string;
+  status: "running" | "succeeded" | "failed";
+  summary?: string;
+};
+
+type DisplayToolActivity = Omit<ToolActivity, "status"> & {
+  status: ToolActivity["status"] | "stopped";
+};
+
 export type ChatStreamPayload = {
   requestId: string;
   conversationId?: string;
@@ -33,6 +44,7 @@ export type ChatStreamPayload = {
   done?: boolean;
   error?: string;
   status?: MessageStatus;
+  toolActivity?: ToolActivity;
 };
 
 export type ChatSettings = {
@@ -59,6 +71,13 @@ export default function ChatPanel({ onNavigate }: ChatPanelProps) {
   const [historyOpen, setHistoryOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<ConversationSummary | null>(null);
   const [deleting, setDeleting] = useState(false);
+  const [toolActivities, setToolActivities] = useState<DisplayToolActivity[]>([]);
+
+  function stopToolActivities() {
+    setToolActivities((items) => items.map((item) =>
+      item.status === "running" ? { ...item, status: "stopped" } : item
+    ));
+  }
 
   async function deleteConversation() {
     if (!deleteTarget || isStreaming || deleting) return;
@@ -66,6 +85,7 @@ export default function ChatPanel({ onNavigate }: ChatPanelProps) {
     try {
       await invoke("delete_conversation", { id: deleteTarget.id });
       setConversations((items) => items.filter((item) => item.id !== deleteTarget.id));
+      setToolActivities([]);
       if (activeConversationId === deleteTarget.id) { setActiveConversationId(null); setMessages([]); }
       setDeleteTarget(null);
     } catch (reason) { setError(String(reason)); }
@@ -137,6 +157,7 @@ export default function ChatPanel({ onNavigate }: ChatPanelProps) {
 
   async function reopenConversation(id: string) {
     if (id === activeConversationId) return;
+    setToolActivities([]);
 
     if (activeRequestIdRef.current) {
       try {
@@ -165,6 +186,7 @@ export default function ChatPanel({ onNavigate }: ChatPanelProps) {
   }
 
   async function handleNewChat() {
+    setToolActivities([]);
     if (activeRequestIdRef.current) {
       try {
         await invoke("cancel_chat", { requestId: activeRequestIdRef.current });
@@ -191,6 +213,7 @@ export default function ChatPanel({ onNavigate }: ChatPanelProps) {
 
     const requestId = crypto.randomUUID();
     activeRequestIdRef.current = requestId;
+    setToolActivities([]);
     setIsStreaming(true);
     setError(null);
     setCancelError(null);
@@ -230,6 +253,20 @@ export default function ChatPanel({ onNavigate }: ChatPanelProps) {
 
         if (payload.conversationId) {
           setActiveConversationId(payload.conversationId);
+        }
+
+        if (payload.toolActivity) {
+          const activity = payload.toolActivity;
+          setToolActivities((items) => {
+            const existing = items.find((item) => item.id === activity.id);
+            // A late running event must not revive a completed operation.
+            if (existing && existing.status !== "running" && activity.status === "running") return items;
+            return [...items.filter((item) => item.id !== activity.id), activity].slice(-16);
+          });
+        }
+
+        if (payload.done || payload.error || payload.status === "cancelled" || payload.status === "failed") {
+          stopToolActivities();
         }
 
         if (payload.delta) {
@@ -284,6 +321,8 @@ export default function ChatPanel({ onNavigate }: ChatPanelProps) {
         setActiveConversationId(res.conversationId);
       }
     } catch (err) {
+      if (activeRequestIdRef.current !== requestId) return;
+      stopToolActivities();
       const errMsg = String(err);
       setError(errMsg);
       setMessages((prev) =>
@@ -468,6 +507,26 @@ export default function ChatPanel({ onNavigate }: ChatPanelProps) {
             </article>
           ))}
         </div>
+      )}
+
+      {toolActivities.length > 0 && (
+        <section className="tool-activity" aria-label="Tool activity">
+          <div className="tool-activity-heading">
+            <strong>Tool activity</strong>
+            <span>Current turn only</span>
+          </div>
+          <ol className="tool-activity-list">
+            {toolActivities.map((activity) => (
+              <li key={activity.id} className="tool-activity-row" data-status={activity.status}>
+                <span className="tool-activity-indicator" aria-hidden="true" />
+                <span className="tool-activity-summary">{activity.summary || "Tool operation"}</span>
+                <span className="tool-activity-status">
+                  {activity.status === "running" ? "Running" : activity.status === "succeeded" ? "Succeeded" : activity.status === "failed" ? "Failed" : "Stopped - completion not confirmed"}
+                </span>
+              </li>
+            ))}
+          </ol>
+        </section>
       )}
 
       <div className="composer">

@@ -1,4 +1,5 @@
 pub mod commands;
+pub mod discovery;
 pub mod explorer;
 pub mod models;
 pub mod reader;

@@ -72,6 +72,24 @@ pub struct StartChatResponse {
     pub conversation_id: String,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ToolActivityStatus {
+    Running,
+    Succeeded,
+    Failed,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolActivityPayload {
+    pub id: String,
+    pub name: String,
+    pub status: ToolActivityStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ChatStreamPayload {
@@ -85,4 +103,53 @@ pub struct ChatStreamPayload {
     pub error: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub status: Option<MessageStatus>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_activity: Option<ToolActivityPayload>,
+}
+
+impl ChatStreamPayload {
+    pub fn delta(request_id: String, conversation_id: String, delta: String) -> Self {
+        Self {
+            request_id,
+            conversation_id,
+            delta: Some(delta),
+            done: None,
+            error: None,
+            status: None,
+            tool_activity: None,
+        }
+    }
+
+    pub fn terminal(
+        request_id: String,
+        conversation_id: String,
+        status: MessageStatus,
+        error: Option<String>,
+    ) -> Self {
+        Self {
+            request_id,
+            conversation_id,
+            delta: None,
+            done: Some(true),
+            error,
+            status: Some(status),
+            tool_activity: None,
+        }
+    }
+
+    pub fn activity(
+        request_id: String,
+        conversation_id: String,
+        activity: ToolActivityPayload,
+    ) -> Self {
+        Self {
+            request_id,
+            conversation_id,
+            delta: None,
+            done: None,
+            error: None,
+            status: None,
+            tool_activity: Some(activity),
+        }
+    }
 }

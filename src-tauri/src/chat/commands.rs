@@ -14,13 +14,15 @@ use super::history::{
 };
 use super::models::{
     ChatConfig, ChatMessage, ChatSettingsDto, ChatStreamPayload, ConversationDetail,
-    ConversationSummary, MessageRole, MessageStatus, StartChatResponse,
+    ConversationSummary, MessageRole, MessageStatus, StartChatResponse, ToolActivityPayload,
+    ToolActivityStatus,
 };
 use super::parser::{ParsedEvent, SseParser};
 use super::state::ChatState;
 use super::tools::{
     MAX_CUMULATIVE_TOOL_OUTPUT_BYTES, MAX_TOOL_RESULT_BYTES, MAX_TOOL_ROUNDS, MAX_TOTAL_TOOL_CALLS,
     ToolCallAccumulator, ToolResult, execute_tool, get_chat_tools, reauthorize_tool_result,
+    safe_running_summary, summarize_tool_output,
 };
 
 const SETTINGS_FILE_NAME: &str = "chat_settings.json";
@@ -503,14 +505,12 @@ pub async fn execute_chat_stream(
             MessageStatus::Cancelled,
         )
         .await;
-        sink.emit_event(ChatStreamPayload {
-            request_id: req_id.clone(),
-            conversation_id: conv_id,
-            delta: None,
-            done: Some(true),
-            error: Some("Chat was cancelled.".to_string()),
-            status: Some(MessageStatus::Cancelled),
-        });
+        sink.emit_event(ChatStreamPayload::terminal(
+            req_id.clone(),
+            conv_id,
+            MessageStatus::Cancelled,
+            Some("Chat was cancelled.".to_string()),
+        ));
         state.finish_request(&req_id);
         return;
     }
@@ -523,6 +523,7 @@ pub async fn execute_chat_stream(
     let mut round = 0usize;
     let mut total_tool_calls = 0usize;
     let mut cumulative_tool_output_bytes = 0usize;
+    let mut is_synthesis_round = false;
 
     loop {
         if *cancel_rx.borrow() {
@@ -534,14 +535,12 @@ pub async fn execute_chat_stream(
                 MessageStatus::Cancelled,
             )
             .await;
-            sink.emit_event(ChatStreamPayload {
-                request_id: req_id.clone(),
-                conversation_id: conv_id,
-                delta: None,
-                done: Some(true),
-                error: Some("Chat was cancelled.".to_string()),
-                status: Some(MessageStatus::Cancelled),
-            });
+            sink.emit_event(ChatStreamPayload::terminal(
+                req_id.clone(),
+                conv_id,
+                MessageStatus::Cancelled,
+                Some("Chat was cancelled.".to_string()),
+            ));
             state.finish_request(&req_id);
             return;
         }
@@ -561,7 +560,11 @@ pub async fn execute_chat_stream(
         let req_body = ChatCompletionRequest {
             model: model.clone(),
             messages: working_messages.clone(),
-            tools: Some(tools.clone()),
+            tools: if is_synthesis_round {
+                None
+            } else {
+                Some(tools.clone())
+            },
             stream: true,
         };
 
@@ -589,14 +592,12 @@ pub async fn execute_chat_stream(
                     MessageStatus::Failed,
                 )
                 .await;
-                sink.emit_event(ChatStreamPayload {
-                    request_id: req_id.clone(),
-                    conversation_id: conv_id,
-                    delta: None,
-                    done: Some(true),
-                    error: Some(sanitized),
-                    status: Some(MessageStatus::Failed),
-                });
+                sink.emit_event(ChatStreamPayload::terminal(
+                    req_id.clone(),
+                    conv_id,
+                    MessageStatus::Failed,
+                    Some(sanitized),
+                ));
                 state.finish_request(&req_id);
                 return;
             }
@@ -613,14 +614,12 @@ pub async fn execute_chat_stream(
                 MessageStatus::Failed,
             )
             .await;
-            sink.emit_event(ChatStreamPayload {
-                request_id: req_id.clone(),
-                conversation_id: conv_id,
-                delta: None,
-                done: Some(true),
-                error: Some(sanitized),
-                status: Some(MessageStatus::Failed),
-            });
+            sink.emit_event(ChatStreamPayload::terminal(
+                req_id.clone(),
+                conv_id,
+                MessageStatus::Failed,
+                Some(sanitized),
+            ));
             state.finish_request(&req_id);
             return;
         }
@@ -642,14 +641,12 @@ pub async fn execute_chat_stream(
                     MessageStatus::Cancelled,
                 )
                 .await;
-                sink.emit_event(ChatStreamPayload {
-                    request_id: req_id.clone(),
-                    conversation_id: conv_id,
-                    delta: None,
-                    done: Some(true),
-                    error: Some("Chat was cancelled.".to_string()),
-                    status: Some(MessageStatus::Cancelled),
-                });
+                sink.emit_event(ChatStreamPayload::terminal(
+                    req_id.clone(),
+                    conv_id,
+                    MessageStatus::Cancelled,
+                    Some("Chat was cancelled.".to_string()),
+                ));
                 state.finish_request(&req_id);
                 return;
             }
@@ -665,14 +662,12 @@ pub async fn execute_chat_stream(
                             MessageStatus::Cancelled,
                         )
                         .await;
-                        sink.emit_event(ChatStreamPayload {
-                            request_id: req_id.clone(),
-                            conversation_id: conv_id,
-                            delta: None,
-                            done: Some(true),
-                            error: Some("Chat was cancelled.".to_string()),
-                            status: Some(MessageStatus::Cancelled),
-                        });
+                        sink.emit_event(ChatStreamPayload::terminal(
+                            req_id.clone(),
+                            conv_id,
+                            MessageStatus::Cancelled,
+                            Some("Chat was cancelled.".to_string()),
+                        ));
                         state.finish_request(&req_id);
                         return;
                     }
@@ -690,14 +685,12 @@ pub async fn execute_chat_stream(
                                     MessageStatus::Failed,
                                 )
                                 .await;
-                                sink.emit_event(ChatStreamPayload {
-                                    request_id: req_id.clone(),
-                                    conversation_id: conv_id,
-                                    delta: None,
-                                    done: Some(true),
-                                    error: Some("Response exceeded maximum allowed size (5MB).".to_string()),
-                                    status: Some(MessageStatus::Failed),
-                                });
+                                sink.emit_event(ChatStreamPayload::terminal(
+                                    req_id.clone(),
+                                    conv_id,
+                                    MessageStatus::Failed,
+                                    Some("Response exceeded maximum allowed size (5MB).".to_string()),
+                                ));
                                 state.finish_request(&req_id);
                                 return;
                             }
@@ -709,14 +702,11 @@ pub async fn execute_chat_stream(
                                     ParsedEvent::Delta(delta) => {
                                         round_assistant_content.push_str(&delta);
                                         accumulated_content.push_str(&delta);
-                                        sink.emit_event(ChatStreamPayload {
-                                            request_id: req_id.clone(),
-                                            conversation_id: conv_id.clone(),
-                                            delta: Some(delta),
-                                            done: None,
-                                            error: None,
-                                            status: None,
-                                        });
+                                        sink.emit_event(ChatStreamPayload::delta(
+                                            req_id.clone(),
+                                            conv_id.clone(),
+                                            delta,
+                                        ));
                                     }
                                     ParsedEvent::ToolCallDelta { index, id, name, arguments_delta } => {
                                         if let Err(e) = tool_accumulator.process_delta(index, id, name, arguments_delta) {
@@ -728,14 +718,12 @@ pub async fn execute_chat_stream(
                                                 MessageStatus::Failed,
                                             )
                                             .await;
-                                            sink.emit_event(ChatStreamPayload {
-                                                request_id: req_id.clone(),
-                                                conversation_id: conv_id,
-                                                delta: None,
-                                                done: Some(true),
-                                                error: Some(e),
-                                                status: Some(MessageStatus::Failed),
-                                            });
+                                            sink.emit_event(ChatStreamPayload::terminal(
+                                                req_id.clone(),
+                                                conv_id,
+                                                MessageStatus::Failed,
+                                                Some(e),
+                                            ));
                                             state.finish_request(&req_id);
                                             return;
                                         }
@@ -752,14 +740,12 @@ pub async fn execute_chat_stream(
                                             MessageStatus::Failed,
                                         )
                                         .await;
-                                        sink.emit_event(ChatStreamPayload {
-                                            request_id: req_id.clone(),
-                                            conversation_id: conv_id,
-                                            delta: None,
-                                            done: Some(true),
-                                            error: Some(err),
-                                            status: Some(MessageStatus::Failed),
-                                        });
+                                        sink.emit_event(ChatStreamPayload::terminal(
+                                            req_id.clone(),
+                                            conv_id,
+                                            MessageStatus::Failed,
+                                            Some(err),
+                                        ));
                                         state.finish_request(&req_id);
                                         return;
                                     }
@@ -780,14 +766,12 @@ pub async fn execute_chat_stream(
                                 MessageStatus::Failed,
                             )
                             .await;
-                            sink.emit_event(ChatStreamPayload {
-                                request_id: req_id.clone(),
-                                conversation_id: conv_id,
-                                delta: None,
-                                done: Some(true),
-                                error: Some(err_msg),
-                                status: Some(MessageStatus::Failed),
-                            });
+                            sink.emit_event(ChatStreamPayload::terminal(
+                                req_id.clone(),
+                                conv_id,
+                                MessageStatus::Failed,
+                                Some(err_msg),
+                            ));
                             state.finish_request(&req_id);
                             return;
                         }
@@ -805,14 +789,11 @@ pub async fn execute_chat_stream(
                 ParsedEvent::Delta(delta) => {
                     round_assistant_content.push_str(&delta);
                     accumulated_content.push_str(&delta);
-                    sink.emit_event(ChatStreamPayload {
-                        request_id: req_id.clone(),
-                        conversation_id: conv_id.clone(),
-                        delta: Some(delta),
-                        done: None,
-                        error: None,
-                        status: None,
-                    });
+                    sink.emit_event(ChatStreamPayload::delta(
+                        req_id.clone(),
+                        conv_id.clone(),
+                        delta,
+                    ));
                 }
                 ParsedEvent::ToolCallDelta {
                     index,
@@ -830,14 +811,12 @@ pub async fn execute_chat_stream(
                             MessageStatus::Failed,
                         )
                         .await;
-                        sink.emit_event(ChatStreamPayload {
-                            request_id: req_id.clone(),
-                            conversation_id: conv_id,
-                            delta: None,
-                            done: Some(true),
-                            error: Some(e),
-                            status: Some(MessageStatus::Failed),
-                        });
+                        sink.emit_event(ChatStreamPayload::terminal(
+                            req_id.clone(),
+                            conv_id,
+                            MessageStatus::Failed,
+                            Some(e),
+                        ));
                         state.finish_request(&req_id);
                         return;
                     }
@@ -854,14 +833,12 @@ pub async fn execute_chat_stream(
                         MessageStatus::Failed,
                     )
                     .await;
-                    sink.emit_event(ChatStreamPayload {
-                        request_id: req_id.clone(),
-                        conversation_id: conv_id,
-                        delta: None,
-                        done: Some(true),
-                        error: Some(err),
-                        status: Some(MessageStatus::Failed),
-                    });
+                    sink.emit_event(ChatStreamPayload::terminal(
+                        req_id.clone(),
+                        conv_id,
+                        MessageStatus::Failed,
+                        Some(err),
+                    ));
                     state.finish_request(&req_id);
                     return;
                 }
@@ -877,14 +854,12 @@ pub async fn execute_chat_stream(
                 MessageStatus::Failed,
             )
             .await;
-            sink.emit_event(ChatStreamPayload {
-                request_id: req_id.clone(),
-                conversation_id: conv_id,
-                delta: None,
-                done: Some(true),
-                error: Some("Stream ended before completion was confirmed.".into()),
-                status: Some(MessageStatus::Failed),
-            });
+            sink.emit_event(ChatStreamPayload::terminal(
+                req_id.clone(),
+                conv_id,
+                MessageStatus::Failed,
+                Some("Stream ended before completion was confirmed.".into()),
+            ));
             state.finish_request(&req_id);
             return;
         }
@@ -905,94 +880,77 @@ pub async fn execute_chat_stream(
                 MessageStatus::Complete,
             )
             .await;
-            sink.emit_event(ChatStreamPayload {
-                request_id: req_id.clone(),
-                conversation_id: conv_id,
-                delta: None,
-                done: Some(true),
-                error: saved.as_ref().err().map(|_| "Response received but history could not be saved. Do not assume it will survive restart.".to_string()),
-                status: Some(if saved.is_ok() { MessageStatus::Complete } else { MessageStatus::Failed }),
-            });
+            sink.emit_event(ChatStreamPayload::terminal(
+                req_id.clone(),
+                conv_id,
+                if saved.is_ok() {
+                    MessageStatus::Complete
+                } else {
+                    MessageStatus::Failed
+                },
+                saved.as_ref().err().map(|_| {
+                    "Response received but history could not be saved. Do not assume it will survive restart."
+                        .to_string()
+                }),
+            ));
             state.finish_request(&req_id);
             return;
         }
 
-        // Tools were requested
+        // Tools were requested!
+        if is_synthesis_round {
+            // The model emitted tool calls despite tools: None in synthesis round.
+            // Do not loop again; if no text was produced, fail truthfully rather than fabricating success.
+            let (status, err) = if accumulated_content.is_empty() {
+                (
+                    MessageStatus::Failed,
+                    Some(format!(
+                        "Exceeded maximum tool calling rounds limit ({}).",
+                        MAX_TOOL_ROUNDS
+                    )),
+                )
+            } else {
+                (MessageStatus::Complete, None)
+            };
+            let _ = save_terminal_assistant(
+                &data_root,
+                &conv_id,
+                assistant_id,
+                accumulated_content,
+                status,
+            )
+            .await;
+            sink.emit_event(ChatStreamPayload::terminal(
+                req_id.clone(),
+                conv_id,
+                status,
+                err,
+            ));
+            state.finish_request(&req_id);
+            return;
+        }
+
         round += 1;
-        if round > MAX_TOOL_ROUNDS {
-            let _ = save_terminal_assistant(
-                &data_root,
-                &conv_id,
-                assistant_id,
-                accumulated_content,
-                MessageStatus::Failed,
-            )
-            .await;
-            sink.emit_event(ChatStreamPayload {
-                request_id: req_id.clone(),
-                conversation_id: conv_id,
-                delta: None,
-                done: Some(true),
-                error: Some(format!(
-                    "Exceeded maximum tool calling rounds limit ({}).",
-                    MAX_TOOL_ROUNDS
-                )),
-                status: Some(MessageStatus::Failed),
-            });
-            state.finish_request(&req_id);
-            return;
+        let budget_exhausted = round >= MAX_TOOL_ROUNDS
+            || (total_tool_calls + raw_calls.len()) >= MAX_TOTAL_TOOL_CALLS;
+        if budget_exhausted {
+            is_synthesis_round = true;
         }
 
-        if total_tool_calls + raw_calls.len() > MAX_TOTAL_TOOL_CALLS {
-            let _ = save_terminal_assistant(
-                &data_root,
-                &conv_id,
-                assistant_id,
-                accumulated_content,
-                MessageStatus::Failed,
-            )
-            .await;
-            sink.emit_event(ChatStreamPayload {
-                request_id: req_id.clone(),
-                conversation_id: conv_id,
-                delta: None,
-                done: Some(true),
-                error: Some(format!(
-                    "Exceeded maximum total tool calls limit ({}).",
-                    MAX_TOTAL_TOOL_CALLS
-                )),
-                status: Some(MessageStatus::Failed),
-            });
-            state.finish_request(&req_id);
-            return;
-        }
-        total_tool_calls += raw_calls.len();
-
-        if *cancel_rx.borrow() {
-            let _ = save_terminal_assistant(
-                &data_root,
-                &conv_id,
-                assistant_id,
-                accumulated_content,
-                MessageStatus::Cancelled,
-            )
-            .await;
-            sink.emit_event(ChatStreamPayload {
-                request_id: req_id.clone(),
-                conversation_id: conv_id,
-                delta: None,
-                done: Some(true),
-                error: Some("Chat was cancelled.".to_string()),
-                status: Some(MessageStatus::Cancelled),
-            });
-            state.finish_request(&req_id);
-            return;
-        }
-
-        // Execute tools
+        // Execute tools with observable activity
         let mut tool_results: Vec<ToolResult> = Vec::new();
         for mut call in raw_calls.clone() {
             if *cancel_rx.borrow() {
+                sink.emit_event(ChatStreamPayload::activity(
+                    req_id.clone(),
+                    conv_id.clone(),
+                    ToolActivityPayload {
+                        id: call.id.clone(),
+                        name: call.name.clone(),
+                        status: ToolActivityStatus::Failed,
+                        summary: Some("Cancelled".to_string()),
+                    },
+                ));
                 let _ = save_terminal_assistant(
                     &data_root,
                     &conv_id,
@@ -1001,14 +959,12 @@ pub async fn execute_chat_stream(
                     MessageStatus::Cancelled,
                 )
                 .await;
-                sink.emit_event(ChatStreamPayload {
-                    request_id: req_id.clone(),
-                    conversation_id: conv_id,
-                    delta: None,
-                    done: Some(true),
-                    error: Some("Chat was cancelled.".to_string()),
-                    status: Some(MessageStatus::Cancelled),
-                });
+                sink.emit_event(ChatStreamPayload::terminal(
+                    req_id.clone(),
+                    conv_id,
+                    MessageStatus::Cancelled,
+                    Some("Chat was cancelled.".to_string()),
+                ));
                 state.finish_request(&req_id);
                 return;
             }
@@ -1017,19 +973,67 @@ pub async fn execute_chat_stream(
                 call.id = format!("call_{}", uuid::Uuid::new_v4());
             }
 
-            if cumulative_tool_output_bytes >= MAX_CUMULATIVE_TOOL_OUTPUT_BYTES {
+            // Emit running activity
+            sink.emit_event(ChatStreamPayload::activity(
+                req_id.clone(),
+                conv_id.clone(),
+                ToolActivityPayload {
+                    id: call.id.clone(),
+                    name: call.name.clone(),
+                    status: ToolActivityStatus::Running,
+                    summary: Some(safe_running_summary(&call.name)),
+                },
+            ));
+
+            if total_tool_calls >= MAX_TOTAL_TOOL_CALLS {
+                let err_json = serde_json::to_string(&serde_json::json!({
+                    "error": "Tool call budget exceeded (maximum 16 total calls reached). Please synthesize a response from available findings, noting any incomplete areas."
+                }))
+                .unwrap();
+                sink.emit_event(ChatStreamPayload::activity(
+                    req_id.clone(),
+                    conv_id.clone(),
+                    ToolActivityPayload {
+                        id: call.id.clone(),
+                        name: call.name.clone(),
+                        status: ToolActivityStatus::Failed,
+                        summary: Some("Tool budget exceeded".to_string()),
+                    },
+                ));
                 tool_results.push(ToolResult {
                     id: call.id,
                     name: call.name,
                     arguments: call.arguments,
-                    content: serde_json::to_string(&serde_json::json!({
-                        "error": "Cumulative tool output budget exceeded for this chat turn."
-                    }))
-                    .unwrap(),
+                    content: err_json,
                 });
                 continue;
             }
 
+            if cumulative_tool_output_bytes >= MAX_CUMULATIVE_TOOL_OUTPUT_BYTES {
+                let err_json = serde_json::to_string(&serde_json::json!({
+                    "error": "Cumulative tool output budget exceeded for this chat turn. Please synthesize a response from available findings, noting any incomplete areas."
+                }))
+                .unwrap();
+                sink.emit_event(ChatStreamPayload::activity(
+                    req_id.clone(),
+                    conv_id.clone(),
+                    ToolActivityPayload {
+                        id: call.id.clone(),
+                        name: call.name.clone(),
+                        status: ToolActivityStatus::Failed,
+                        summary: Some("Tool budget exceeded".to_string()),
+                    },
+                ));
+                tool_results.push(ToolResult {
+                    id: call.id,
+                    name: call.name,
+                    arguments: call.arguments,
+                    content: err_json,
+                });
+                continue;
+            }
+
+            total_tool_calls += 1;
             let output_str = execute_tool(&config_dir, &call.name, &call.arguments);
             let bounded_output = if output_str.len() > MAX_TOOL_RESULT_BYTES {
                 serde_json::to_string(&serde_json::json!({
@@ -1041,24 +1045,41 @@ pub async fn execute_chat_stream(
             };
 
             cumulative_tool_output_bytes += bounded_output.len();
-            if cumulative_tool_output_bytes > MAX_CUMULATIVE_TOOL_OUTPUT_BYTES {
-                tool_results.push(ToolResult {
-                    id: call.id,
-                    name: call.name,
-                    arguments: call.arguments,
-                    content: serde_json::to_string(&serde_json::json!({
-                        "error": "Cumulative tool output budget exceeded for this chat turn."
+            let (final_output, act_status, act_summary) = if cumulative_tool_output_bytes
+                > MAX_CUMULATIVE_TOOL_OUTPUT_BYTES
+            {
+                is_synthesis_round = true;
+                let err = serde_json::to_string(&serde_json::json!({
+                        "error": "Cumulative tool output budget exceeded for this chat turn. Please synthesize a response from available findings, noting any incomplete areas."
                     }))
-                    .unwrap(),
-                });
+                    .unwrap();
+                (
+                    err,
+                    ToolActivityStatus::Failed,
+                    "Tool budget exceeded".to_string(),
+                )
             } else {
-                tool_results.push(ToolResult {
-                    id: call.id,
-                    name: call.name,
-                    arguments: call.arguments,
-                    content: bounded_output,
-                });
-            }
+                let (status, summary) = summarize_tool_output(&call.name, &bounded_output);
+                (bounded_output, status, summary)
+            };
+
+            sink.emit_event(ChatStreamPayload::activity(
+                req_id.clone(),
+                conv_id.clone(),
+                ToolActivityPayload {
+                    id: call.id.clone(),
+                    name: call.name.clone(),
+                    status: act_status,
+                    summary: Some(act_summary),
+                },
+            ));
+
+            tool_results.push(ToolResult {
+                id: call.id,
+                name: call.name,
+                arguments: call.arguments,
+                content: final_output,
+            });
         }
 
         // Reauthorize sharing before sending tool results across the network boundary

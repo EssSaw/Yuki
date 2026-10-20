@@ -600,6 +600,51 @@
   background: rgba(92, 121, 109, 0.08);
 }
 
+/* Transient operation evidence stays separate from the persisted message log. */
+.tool-activity {
+  flex-shrink: 0;
+  border-top: 1px solid var(--line-soft);
+  padding-top: 10px;
+  color: var(--ink);
+  font-size: var(--text-secondary);
+}
+.tool-activity-heading {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 6px;
+}
+.tool-activity-heading > span { color: var(--muted); }
+.tool-activity-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 144px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+.tool-activity-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 5px 2px;
+  line-height: 1.5;
+}
+.tool-activity-indicator {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 7px;
+  border: 1px solid currentColor;
+  border-radius: 50%;
+  color: var(--muted-blue-ink);
+}
+.tool-activity-row[data-status="succeeded"] .tool-activity-indicator { background: var(--sage); }
+.tool-activity-row[data-status="failed"] .tool-activity-indicator { background: var(--dusty-pink); }
+.tool-activity-row[data-status="stopped"] .tool-activity-indicator { color: var(--muted); }
+.tool-activity-summary { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.tool-activity-status { flex: 0 1 38%; color: var(--muted); overflow-wrap: anywhere; }
+
 /* Mobile responsive */
 @media (max-width: 600px) {
   .chat-view {

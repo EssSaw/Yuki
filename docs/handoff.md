@@ -1,5 +1,39 @@
 # Current handoff
 
+## Discovery and visible activity integration (2026-10-20)
+
+Implemented marker-based Unity/Godot/Unreal discovery within share-enabled roots,
+explicit coverage/limit metadata, final tool-disabled synthesis on budget exhaustion,
+and transient request-correlated activity in chat. Primary integration tightened
+per-entry enumeration limits and Unity marker-parent link checks. Tool activity shows
+running/succeeded/failed or honestly stopped on termination, capped to 16 entries and
+not reconstructed from history. Validated 87 native tests, 59 frontend tests, frontend
+production and Windows native release build (--no-bundle), plus diff checks. No real
+provider test or rendered desktop/narrow visual acceptance for this slice. Next manual
+test: repeat game-project discovery in a specifically share-enabled non-sensitive test
+folder and verify activity plus partial-coverage wording. Unrelated target/ preserved.
+
+
+## Frontend tool activity (2026-10-20)
+
+Implemented the approved bounded display in `src/ChatPanel.tsx` and
+`src/ChatPanel.css`, with focused `src/ChatPanel.activity.test.tsx` regressions.
+Matches native `toolActivity` id/name/status with optional summary (verified in
+`chat/models.rs`); renders only the native safe summary, never raw metadata.
+Current-request events update by activity ID, retain at most 16 entries and clear
+on send, conversation load/new and successful deletion. Unfinished operations become
+"Stopped - completion not confirmed" on done/error/cancel terminal or start failure;
+cancel acknowledgement alone is not terminal and rejected cancellation stays running.
+Completed/failed evidence remains honest; stale requests and late running updates
+cannot revive completed activities. Activity is transient, outside the message live
+log, with visible status text, bounded scrolling and no added animation.
+Validation: 27 tests passed across activity/model/delete/Typography/VisualCheckpoint
+(5 suites); TypeScript/Vite production build and `git diff --check` passed.
+No native files, architecture docs, shared CSS, dependencies, provider calls,
+private data, commits or pushes changed. DOM/source tests are not desktop/narrow
+visual acceptance; rendered/native review remains pending. Parent integrates native
+changes independently; stop after this UI slice.
+
 ## Latest user feedback and next action (2026-10-20)
 
 Native chat tools are committed/published as 4b1f0fa; final validation was 76 native

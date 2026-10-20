@@ -12,13 +12,17 @@ use super::history::{
     is_symlink_or_reparse, list_conversations_from_disk, load_conversation_from_disk,
     save_conversation_atomic, validate_conversation_id,
 };
-use super::models::{ChatConfig, ChatMessage, ConversationDetail, MessageRole, MessageStatus};
+use super::models::{
+    ChatConfig, ChatMessage, ConversationDetail, MessageRole, MessageStatus, ToolActivityPayload,
+    ToolActivityStatus,
+};
 use super::parser::{ParsedEvent, SseParser};
 use super::state::ChatState;
 use super::tools::{
     MAX_CUMULATIVE_TOOL_OUTPUT_BYTES, MAX_TOOL_ARGUMENTS_BYTES, MAX_TOOL_RESULT_BYTES,
-    MAX_TOOL_ROUNDS, MAX_TOOLS_PER_ROUND, MAX_TOTAL_TOOL_CALLS, ToolCallAccumulator, execute_tool,
-    get_chat_tools, reauthorize_tool_result,
+    MAX_TOOL_ROUNDS, MAX_TOOLS_PER_ROUND, MAX_TOTAL_TOOL_CALLS, TOOL_DISCOVER_GAME_PROJECTS,
+    ToolCallAccumulator, execute_tool, get_chat_tools, reauthorize_tool_result,
+    safe_running_summary, summarize_tool_output,
 };
 use crate::workspace::settings::{add_project_root_path, toggle_project_provider_sharing_impl};
 
@@ -1797,8 +1801,9 @@ fn test_delete_conversation_reports_partial_filesystem_errors() {
 #[test]
 fn test_tool_schema_and_constants() {
     let tools = get_chat_tools();
-    assert_eq!(tools.len(), 3);
+    assert_eq!(tools.len(), 4);
     let names: Vec<&str> = tools.iter().map(|t| t.function.name.as_str()).collect();
+    assert!(names.contains(&"discover_game_projects"));
     assert!(names.contains(&"list_shareable_projects"));
     assert!(names.contains(&"list_project_directory"));
     assert!(names.contains(&"read_file_chunk"));
@@ -2599,4 +2604,368 @@ fn tool_default_chunk_fits_serialized_result_budget() {
     let result: serde_json::Value = serde_json::from_str(&result).unwrap();
     assert_eq!(result["nextOffset"], 8192);
     assert_eq!(result["eof"], false);
+}
+
+// ---------------------------------------------------------------------------
+// Tool Activity and Observable Stream Tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_tool_activity_payload_contract() {
+    let running = ToolActivityPayload {
+        id: "call_abc".to_string(),
+        name: "discover_game_projects".to_string(),
+        status: ToolActivityStatus::Running,
+        summary: Some("Discovering game projects...".to_string()),
+    };
+    let json_running = serde_json::to_string(&running).unwrap();
+    assert!(json_running.contains("\"id\":\"call_abc\""));
+    assert!(json_running.contains("\"name\":\"discover_game_projects\""));
+    assert!(json_running.contains("\"status\":\"running\""));
+    assert!(json_running.contains("\"summary\":\"Discovering game projects...\""));
+
+    let succeeded = ToolActivityPayload {
+        id: "call_abc".to_string(),
+        name: "discover_game_projects".to_string(),
+        status: ToolActivityStatus::Succeeded,
+        summary: Some("Discovered 3 game projects".to_string()),
+    };
+    let json_succeeded = serde_json::to_string(&succeeded).unwrap();
+    assert!(json_succeeded.contains("\"status\":\"succeeded\""));
+
+    let failed = ToolActivityPayload {
+        id: "call_abc".to_string(),
+        name: "read_file_chunk".to_string(),
+        status: ToolActivityStatus::Failed,
+        summary: Some("Failed: Access denied".to_string()),
+    };
+    let json_failed = serde_json::to_string(&failed).unwrap();
+    assert!(json_failed.contains("\"status\":\"failed\""));
+
+    // Verify ChatStreamPayload embedding
+    let stream_payload = super::models::ChatStreamPayload::activity(
+        "req-1".to_string(),
+        "conv-1".to_string(),
+        succeeded,
+    );
+    let json_stream = serde_json::to_string(&stream_payload).unwrap();
+    assert!(json_stream.contains("\"toolActivity\":{"));
+    assert!(!json_stream.contains("\"done\":"));
+}
+
+#[test]
+fn test_safe_running_summary_and_summarize_tool_output() {
+    // 1. Safe running summary tests (no raw args, secrets or raw paths)
+    assert_eq!(
+        safe_running_summary("discover_game_projects"),
+        "Discovering game projects in approved folders"
+    );
+    assert_eq!(
+        safe_running_summary("list_shareable_projects"),
+        "Checking shareable project roots"
+    );
+    assert_eq!(
+        safe_running_summary("list_project_directory"),
+        "Inspecting project directory"
+    );
+    assert_eq!(
+        safe_running_summary("read_file_chunk"),
+        "Reading file chunk"
+    );
+    assert_eq!(
+        safe_running_summary("unknown_tool"),
+        "Executing unknown_tool"
+    );
+
+    // 2. Summarize tool output tests
+    // Discovery success
+    let disc_success = serde_json::json!({
+        "projects": [{"name": "A"}, {"name": "B"}],
+        "coverage": "complete"
+    })
+    .to_string();
+    let (status, summary) = summarize_tool_output("discover_game_projects", &disc_success);
+    assert_eq!(status, ToolActivityStatus::Succeeded);
+    assert_eq!(summary, "Found 2 game project(s)");
+
+    // Discovery structured error
+    let disc_err = serde_json::json!({
+        "error": "Access denied: Root directory is not approved."
+    })
+    .to_string();
+    let (status, summary) = summarize_tool_output("discover_game_projects", &disc_err);
+    assert_eq!(status, ToolActivityStatus::Failed);
+    assert_eq!(summary, "Access denied or restricted path");
+
+    // File chunk read success
+    let read_success = serde_json::json!({
+        "text": "sample text",
+        "bytesRead": 11,
+        "eof": true
+    })
+    .to_string();
+    let (status, summary) = summarize_tool_output("read_file_chunk", &read_success);
+    assert_eq!(status, ToolActivityStatus::Succeeded);
+    assert_eq!(summary, "Read 11 bytes (reached EOF)");
+
+    // File chunk read error
+    let read_err = serde_json::json!({
+        "error": "File is outside approved project folders"
+    })
+    .to_string();
+    let (status, summary) = summarize_tool_output("read_file_chunk", &read_err);
+    assert_eq!(status, ToolActivityStatus::Failed);
+    assert_eq!(summary, "Access denied or restricted path");
+}
+
+#[test]
+fn test_execute_tool_discover_game_projects() {
+    let env = TestEnv::new("tool_exec_discovery");
+    let cfg = env.config_dir();
+    let root = env.new_dir("DiscoveryTestRoot");
+    let canon_root = dunce::canonicalize(&root)
+        .unwrap()
+        .to_string_lossy()
+        .to_string();
+
+    add_project_root_path(&cfg, &root).unwrap();
+    toggle_project_provider_sharing_impl(&cfg, &canon_root, Some(true)).unwrap();
+
+    let proj = root.join("GodotGame");
+    std::fs::create_dir_all(&proj).unwrap();
+    std::fs::write(
+        proj.join("project.godot"),
+        b"config_version=5\n[application]\nconfig/name=\"Nebula\"\n",
+    )
+    .unwrap();
+
+    let output = execute_tool(&cfg, TOOL_DISCOVER_GAME_PROJECTS, "{}");
+    let parsed: serde_json::Value = serde_json::from_str(&output).unwrap();
+    assert_eq!(parsed["coverage"], "complete");
+    assert_eq!(parsed["truncated"], false);
+    let projects = parsed["projects"].as_array().unwrap();
+    assert_eq!(projects.len(), 1);
+    assert_eq!(projects[0]["name"], "Nebula");
+    assert_eq!(projects[0]["engine"], "Godot");
+}
+
+#[test]
+fn test_reauthorize_tool_result_discovery() {
+    let env = TestEnv::new("reauth_tool_discovery");
+    let cfg = env.config_dir();
+    let root = env.new_dir("ReauthDiscoveryRoot");
+    let canon_root = dunce::canonicalize(&root)
+        .unwrap()
+        .to_string_lossy()
+        .to_string();
+
+    add_project_root_path(&cfg, &root).unwrap();
+    toggle_project_provider_sharing_impl(&cfg, &canon_root, Some(true)).unwrap();
+
+    let proj = root.join("UnityGame");
+    std::fs::create_dir_all(proj.join("ProjectSettings")).unwrap();
+    std::fs::write(
+        proj.join("ProjectSettings").join("ProjectVersion.txt"),
+        b"m_EditorVersion: 2022.3.0f1\n",
+    )
+    .unwrap();
+    std::fs::create_dir_all(proj.join("Assets")).unwrap();
+
+    let initial_output = execute_tool(&cfg, TOOL_DISCOVER_GAME_PROJECTS, "{}");
+    assert!(initial_output.contains("UnityGame"));
+
+    let mut output_to_reauth = initial_output.clone();
+    reauthorize_tool_result(
+        &cfg,
+        TOOL_DISCOVER_GAME_PROJECTS,
+        "{}",
+        &mut output_to_reauth,
+    );
+    assert_eq!(initial_output, output_to_reauth);
+
+    // Revoke root
+    toggle_project_provider_sharing_impl(&cfg, &canon_root, Some(false)).unwrap();
+    reauthorize_tool_result(
+        &cfg,
+        TOOL_DISCOVER_GAME_PROJECTS,
+        "{}",
+        &mut output_to_reauth,
+    );
+    assert!(
+        output_to_reauth.contains("Provider sharing was revoked for all scanned project roots")
+    );
+    assert!(!output_to_reauth.contains("UnityGame"));
+}
+
+#[tokio::test]
+async fn test_execute_chat_stream_graceful_budget_synthesis_and_activity() {
+    let env = TestEnv::new("stream_graceful_synthesis");
+    let data_root = env.data_root();
+    let cfg = env.config_dir();
+
+    let root = env.new_dir("BudgetSimRoot");
+    let canon_root = dunce::canonicalize(&root)
+        .unwrap()
+        .to_string_lossy()
+        .to_string();
+
+    add_project_root_path(&cfg, &root).unwrap();
+    toggle_project_provider_sharing_impl(&cfg, &canon_root, Some(true)).unwrap();
+
+    let proj = root.join("AdventureGame");
+    std::fs::create_dir_all(&proj).unwrap();
+    std::fs::write(
+        proj.join("project.godot"),
+        b"config_version=5\n[application]\nconfig/name=\"Adventure\"\n",
+    )
+    .unwrap();
+
+    let conv_id = uuid::Uuid::new_v4().to_string();
+    let user_msg = ChatMessage {
+        id: uuid::Uuid::new_v4().to_string(),
+        role: MessageRole::User,
+        content: "Discover game projects".to_string(),
+        status: MessageStatus::Complete,
+    };
+    let initial_conv = ConversationDetail {
+        id: conv_id.clone(),
+        title: "Synthesis Test".to_string(),
+        updated_at: "2026-10-19T10:00:00Z".to_string(),
+        messages: vec![user_msg],
+    };
+    save_conversation_atomic(&data_root, &initial_conv).unwrap();
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+
+    tokio::spawn(async move {
+        let mut request_count = 0;
+        while let Ok((mut socket, _)) = listener.accept().await {
+            request_count += 1;
+            let req_text = read_http_request(&mut socket).await;
+
+            if request_count <= MAX_TOOL_ROUNDS {
+                // Rounds 1..5: Model issues tool call
+                let sse_obj = serde_json::json!({
+                    "choices": [{
+                        "delta": {
+                            "tool_calls": [{
+                                "index": 0,
+                                "id": format!("call_{request_count}"),
+                                "type": "function",
+                                "function": {
+                                    "name": "discover_game_projects",
+                                    "arguments": "{}"
+                                }
+                            }]
+                        },
+                        "finish_reason": "tool_calls"
+                    }]
+                });
+                let tool_call = format!("data: {}\n\n", serde_json::to_string(&sse_obj).unwrap());
+
+                let header = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\nTransfer-Encoding: chunked\r\n\r\n";
+                let _ = socket.write_all(header.as_bytes()).await;
+
+                let chunk_hdr = format!("{:X}\r\n{}\r\n", tool_call.len(), tool_call);
+                let _ = socket.write_all(chunk_hdr.as_bytes()).await;
+                let _ = socket.write_all(b"0\r\n\r\n").await;
+            } else if request_count == MAX_TOOL_ROUNDS + 1 {
+                // Round 6: System dispatches final synthesis round!
+                // Verify tools was NOT sent in the request body for synthesis round
+                assert!(
+                    !req_text.contains("\"tools\":["),
+                    "Synthesis round must have tools disabled"
+                );
+
+                // Model outputs final synthesis text
+                let ans = "data: {\"choices\":[{\"delta\":{\"content\":\"Found Godot project: Adventure.\"},\"finish_reason\":null}]}\n\n";
+                let stop = "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n";
+                let done = "data: [DONE]\n\n";
+
+                let header = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\nTransfer-Encoding: chunked\r\n\r\n";
+                let _ = socket.write_all(header.as_bytes()).await;
+
+                for p in [ans, stop, done] {
+                    let chunk_hdr = format!("{:X}\r\n{}\r\n", p.len(), p);
+                    let _ = socket.write_all(chunk_hdr.as_bytes()).await;
+                    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+                }
+                let _ = socket.write_all(b"0\r\n\r\n").await;
+                break;
+            }
+        }
+    });
+
+    let store = MockSecretStore::new();
+    let state = ChatState::new(store);
+    let req_id = "req-synthesis-stream";
+
+    let cancel_rx = state
+        .try_start_request(req_id, &conv_id)
+        .expect("Should acquire active lock");
+
+    let sink = TestEventSink::new();
+    let base_url = format!("http://{addr}/v1");
+
+    super::commands::execute_chat_stream(
+        sink.clone(),
+        state.clone(),
+        data_root.clone(),
+        cfg.clone(),
+        conv_id.clone(),
+        req_id.to_string(),
+        base_url,
+        "test-model".to_string(),
+        None,
+        initial_conv.messages.clone(),
+        cancel_rx,
+    )
+    .await;
+
+    let events = sink.get_events();
+
+    // 1. Verify toolActivity events were emitted
+    let activity_events: Vec<&ToolActivityPayload> = events
+        .iter()
+        .filter_map(|e| e.tool_activity.as_ref())
+        .collect();
+    assert!(!activity_events.is_empty(), "Must emit toolActivity events");
+
+    // Check first tool call emitted running then succeeded
+    let call_1_events: Vec<&&ToolActivityPayload> = activity_events
+        .iter()
+        .filter(|a| a.id == "call_1")
+        .collect();
+    assert_eq!(call_1_events.len(), 2);
+    assert_eq!(call_1_events[0].status, ToolActivityStatus::Running);
+    assert_eq!(
+        call_1_events[0].summary.as_deref(),
+        Some("Discovering game projects in approved folders")
+    );
+    assert_eq!(call_1_events[1].status, ToolActivityStatus::Succeeded);
+    assert_eq!(
+        call_1_events[1].summary.as_deref(),
+        Some("Found 1 game project(s)")
+    );
+
+    // 2. Verify synthesis text was emitted and stream completed
+    let deltas: Vec<String> = events.iter().filter_map(|e| e.delta.clone()).collect();
+    assert_eq!(deltas, vec!["Found Godot project: Adventure.".to_string()]);
+
+    let terminal_events: Vec<&super::models::ChatStreamPayload> =
+        events.iter().filter(|e| e.done == Some(true)).collect();
+    assert_eq!(terminal_events.len(), 1);
+    assert_eq!(terminal_events[0].status, Some(MessageStatus::Complete));
+    assert_eq!(terminal_events[0].error, None);
+
+    // 3. Verify history on disk contains only user message and synthesized assistant message
+    let loaded = load_conversation_from_disk(&data_root, &conv_id).unwrap();
+    assert_eq!(loaded.messages.len(), 2);
+    assert_eq!(loaded.messages[1].role, MessageRole::Assistant);
+    assert_eq!(
+        loaded.messages[1].content,
+        "Found Godot project: Adventure."
+    );
+    assert_eq!(loaded.messages[1].status, MessageStatus::Complete);
 }

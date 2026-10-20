@@ -1,5 +1,8 @@
 use std::path::{Path, PathBuf};
 
+use super::discovery::{
+    discover_game_projects_impl, identify_game_project, reauthorize_discovery_result,
+};
 use super::explorer::{
     get_shareable_project_roots_impl, is_blocked_name, is_drive_root, is_system_directory,
     is_user_profile_root, list_project_directory_impl, list_provider_project_directory_impl,
@@ -1030,4 +1033,293 @@ fn test_list_provider_project_directory_impl() {
         err_revoked,
         "Provider sharing is not enabled for this project folder"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Game Project Discovery Tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_identify_game_project_unity() {
+    let env = TestEnv::new("id_unity");
+    let proj = env.new_dir("UnityTest");
+    let canon_proj = dunce::canonicalize(&proj).unwrap();
+    let root_str = canon_proj.to_string_lossy().to_string();
+
+    // Initially empty - not a project
+    assert!(identify_game_project(&proj, &canon_proj, &root_str).is_none());
+
+    // Only ProjectSettings/ProjectVersion.txt without Assets/ -> not a project
+    let settings_dir = proj.join("ProjectSettings");
+    std::fs::create_dir_all(&settings_dir).unwrap();
+    std::fs::write(
+        settings_dir.join("ProjectVersion.txt"),
+        b"m_EditorVersion: 2022.3.15f1\nm_EditorVersionWithRevision: 2022.3.15f1 (abcdef)",
+    )
+    .unwrap();
+    assert!(identify_game_project(&proj, &canon_proj, &root_str).is_none());
+
+    // Add Assets/ directory -> valid Unity project
+    std::fs::create_dir_all(proj.join("Assets")).unwrap();
+    let discovered = identify_game_project(&proj, &canon_proj, &root_str)
+        .expect("Must identify as Unity project");
+    assert_eq!(discovered.engine, "Unity");
+    assert_eq!(discovered.version.as_deref(), Some("2022.3.15f1"));
+    assert_eq!(discovered.name, "UnityTest");
+    assert!(
+        discovered
+            .evidence
+            .contains(&"ProjectSettings/ProjectVersion.txt".to_string())
+    );
+    assert!(discovered.evidence.contains(&"Assets".to_string()));
+}
+
+#[test]
+fn test_identify_game_project_godot() {
+    let env = TestEnv::new("id_godot");
+    let proj = env.new_dir("GodotTest");
+    let canon_proj = dunce::canonicalize(&proj).unwrap();
+    let root_str = canon_proj.to_string_lossy().to_string();
+
+    // Initially empty
+    assert!(identify_game_project(&proj, &canon_proj, &root_str).is_none());
+
+    // Add project.godot
+    let godot_cfg = r#"; Engine configuration file.
+config_version=5
+
+[application]
+config/name="Super Space Explorer"
+run/main_scene="res://main.tscn"
+"#;
+    std::fs::write(proj.join("project.godot"), godot_cfg).unwrap();
+
+    let discovered = identify_game_project(&proj, &canon_proj, &root_str)
+        .expect("Must identify as Godot project");
+    assert_eq!(discovered.engine, "Godot");
+    assert_eq!(discovered.version.as_deref(), Some("4.x"));
+    assert_eq!(discovered.name, "Super Space Explorer");
+    assert!(discovered.evidence.contains(&"project.godot".to_string()));
+}
+
+#[test]
+fn test_identify_game_project_unreal() {
+    let env = TestEnv::new("id_unreal");
+    let proj = env.new_dir("UnrealTest");
+    let canon_proj = dunce::canonicalize(&proj).unwrap();
+    let root_str = canon_proj.to_string_lossy().to_string();
+
+    // Initially empty
+    assert!(identify_game_project(&proj, &canon_proj, &root_str).is_none());
+
+    // Add .uproject
+    let uproject_content = r#"{
+    "FileVersion": 3,
+    "EngineAssociation": "5.4",
+    "Category": "",
+    "Description": ""
+}"#;
+    std::fs::write(proj.join("FantasyQuest.uproject"), uproject_content).unwrap();
+
+    let discovered = identify_game_project(&proj, &canon_proj, &root_str)
+        .expect("Must identify as Unreal project");
+    assert_eq!(discovered.engine, "Unreal");
+    assert_eq!(discovered.version.as_deref(), Some("5.4"));
+    assert_eq!(discovered.name, "FantasyQuest");
+    assert!(
+        discovered
+            .evidence
+            .contains(&"FantasyQuest.uproject".to_string())
+    );
+}
+
+#[test]
+fn test_discover_game_projects_multi_engine_and_exclusions() {
+    let env = TestEnv::new("discover_multi");
+    let cfg = env.config_dir();
+    let root = env.new_dir("RootGames");
+    let canon_root = dunce::canonicalize(&root)
+        .unwrap()
+        .to_string_lossy()
+        .to_string();
+
+    add_project_root_path(&cfg, &root).unwrap();
+    toggle_project_provider_sharing_impl(&cfg, &canon_root, Some(true)).unwrap();
+
+    // 1. Unity project with cache folders
+    let unity_dir = root.join("MyUnityGame");
+    std::fs::create_dir_all(unity_dir.join("ProjectSettings")).unwrap();
+    std::fs::write(
+        unity_dir.join("ProjectSettings").join("ProjectVersion.txt"),
+        b"m_EditorVersion: 2021.3.8f1\n",
+    )
+    .unwrap();
+    std::fs::create_dir_all(unity_dir.join("Assets")).unwrap();
+    // Cache folder inside Unity - should NOT be traversed into
+    let unity_cache = unity_dir.join("Library").join("PackageCache");
+    std::fs::create_dir_all(&unity_cache).unwrap();
+    std::fs::write(unity_cache.join("dummy.txt"), b"cache").unwrap();
+
+    // 2. Godot project with cache folder
+    let godot_dir = root.join("MyGodotGame");
+    std::fs::create_dir_all(&godot_dir).unwrap();
+    std::fs::write(
+        godot_dir.join("project.godot"),
+        b"config_version=4\n[application]\nconfig/name=\"RetroRacer\"\n",
+    )
+    .unwrap();
+    let godot_cache = godot_dir.join(".godot");
+    std::fs::create_dir_all(&godot_cache).unwrap();
+
+    // 3. Unreal project with cache folder
+    let unreal_dir = root.join("MyUnrealGame");
+    std::fs::create_dir_all(&unreal_dir).unwrap();
+    std::fs::write(
+        unreal_dir.join("Arena.uproject"),
+        b"{\"EngineAssociation\": \"5.3\"}",
+    )
+    .unwrap();
+    let unreal_cache = unreal_dir.join("Intermediate");
+    std::fs::create_dir_all(&unreal_cache).unwrap();
+
+    // 4. Secret directory and files - should be excluded
+    let git_dir = root.join(".git");
+    std::fs::create_dir_all(&git_dir).unwrap();
+    // Put a fake project file inside .git to ensure it is never discovered
+    std::fs::write(git_dir.join("project.godot"), b"config_version=5\n").unwrap();
+    std::fs::write(root.join(".env"), b"SECRET=abc").unwrap();
+
+    // 5. Non-game directory
+    let docs_dir = root.join("docs");
+    std::fs::create_dir_all(&docs_dir).unwrap();
+    std::fs::write(docs_dir.join("manual.md"), b"# Docs").unwrap();
+
+    // Run discovery
+    let res = discover_game_projects_impl(&cfg, "{}").expect("Discovery should succeed");
+
+    assert_eq!(
+        res.projects.len(),
+        3,
+        "Must discover exactly the 3 game projects"
+    );
+    let names: Vec<&str> = res.projects.iter().map(|p| p.name.as_str()).collect();
+    assert!(names.contains(&"MyUnityGame"));
+    assert!(names.contains(&"RetroRacer"));
+    assert!(names.contains(&"Arena"));
+
+    assert_eq!(res.coverage, "complete");
+    assert_eq!(res.limits_reached.len(), 0);
+    assert!(!res.truncated);
+    assert!(res.directories_scanned > 0);
+    assert!(res.scanned_roots.contains(&canon_root));
+}
+
+#[test]
+fn test_discover_game_projects_unapproved_root_and_revocation() {
+    let env = TestEnv::new("discover_unapproved_revocation");
+    let cfg = env.config_dir();
+
+    let root_a = env.new_dir("RootA");
+    let root_b = env.new_dir("RootB");
+    let unapproved = env.new_dir("UnapprovedRoot");
+
+    let canon_a = dunce::canonicalize(&root_a)
+        .unwrap()
+        .to_string_lossy()
+        .to_string();
+    let canon_b = dunce::canonicalize(&root_b)
+        .unwrap()
+        .to_string_lossy()
+        .to_string();
+    let canon_unapproved = dunce::canonicalize(&unapproved)
+        .unwrap()
+        .to_string_lossy()
+        .to_string();
+
+    // Setup projects in RootA and RootB
+    let proj_a = root_a.join("GameA");
+    std::fs::create_dir_all(&proj_a).unwrap();
+    std::fs::write(proj_a.join("project.godot"), b"config_version=5\n").unwrap();
+
+    let proj_b = root_b.join("GameB");
+    std::fs::create_dir_all(&proj_b).unwrap();
+    std::fs::write(proj_b.join("GameB.uproject"), b"{}").unwrap();
+
+    // 1. Unapproved root rejected
+    let unapproved_args = serde_json::json!({
+        "project_root": canon_unapproved,
+    })
+    .to_string();
+    let err_unapproved = discover_game_projects_impl(&cfg, &unapproved_args).unwrap_err();
+    assert!(err_unapproved.contains(
+        "Root directory is not an approved project folder or provider sharing is not enabled"
+    ));
+
+    // 2. Approved but unshared root rejected
+    add_project_root_path(&cfg, &root_a).unwrap();
+    let unshared_args = serde_json::json!({
+        "project_root": canon_a,
+    })
+    .to_string();
+    let err_unshared = discover_game_projects_impl(&cfg, &unshared_args).unwrap_err();
+    assert!(err_unshared.contains(
+        "Root directory is not an approved project folder or provider sharing is not enabled"
+    ));
+
+    // 3. Enable sharing on both RootA and RootB
+    add_project_root_path(&cfg, &root_b).unwrap();
+    toggle_project_provider_sharing_impl(&cfg, &canon_a, Some(true)).unwrap();
+    toggle_project_provider_sharing_impl(&cfg, &canon_b, Some(true)).unwrap();
+
+    let discovery_res = discover_game_projects_impl(&cfg, "{}").unwrap();
+    assert_eq!(discovery_res.projects.len(), 2);
+
+    let mut serialized_output = serde_json::to_string(&discovery_res).unwrap();
+
+    // 4. Revocation of RootA: reauthorize_discovery_result prunes RootA projects
+    toggle_project_provider_sharing_impl(&cfg, &canon_a, Some(false)).unwrap();
+    reauthorize_discovery_result(&cfg, &mut serialized_output);
+    let reauth_val: serde_json::Value = serde_json::from_str(&serialized_output).unwrap();
+    let reauth_projects = reauth_val["projects"].as_array().unwrap();
+    assert_eq!(reauth_projects.len(), 1);
+    assert_eq!(reauth_projects[0]["name"], "GameB");
+    let limits = reauth_val["limitsReached"].as_array().unwrap();
+    assert!(limits.iter().any(|v| v == "revoked_grant"));
+
+    // 5. Revocation of RootB as well: all roots revoked -> error
+    toggle_project_provider_sharing_impl(&cfg, &canon_b, Some(false)).unwrap();
+    reauthorize_discovery_result(&cfg, &mut serialized_output);
+    assert!(
+        serialized_output.contains("Provider sharing was revoked for all scanned project roots")
+    );
+}
+
+#[test]
+fn test_discover_game_projects_depth_and_limits() {
+    let env = TestEnv::new("discover_depth_limits");
+    let cfg = env.config_dir();
+    let root = env.new_dir("NestedRoot");
+    let canon_root = dunce::canonicalize(&root)
+        .unwrap()
+        .to_string_lossy()
+        .to_string();
+
+    add_project_root_path(&cfg, &root).unwrap();
+    toggle_project_provider_sharing_impl(&cfg, &canon_root, Some(true)).unwrap();
+
+    // Create deep structure: depth 5
+    let deep_dir = root.join("l1").join("l2").join("l3").join("l4").join("l5");
+    std::fs::create_dir_all(&deep_dir).unwrap();
+    std::fs::write(deep_dir.join("project.godot"), b"config_version=5\n").unwrap();
+
+    // Discover with max_depth = 2
+    let args = serde_json::json!({
+        "max_depth": 2
+    })
+    .to_string();
+    let res = discover_game_projects_impl(&cfg, &args).unwrap();
+    assert_eq!(res.projects.len(), 0, "Should not reach depth 5 project");
+    assert_eq!(res.coverage, "partial");
+    assert!(res.truncated);
+    assert!(res.limits_reached.contains(&"max_depth".to_string()));
 }

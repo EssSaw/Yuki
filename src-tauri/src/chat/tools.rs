@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
+use super::models::ToolActivityStatus;
+use crate::workspace::discovery::{discover_game_projects_impl, reauthorize_discovery_result};
 use crate::workspace::explorer::{
     get_shareable_project_roots_impl, list_provider_project_directory_impl,
 };
@@ -13,6 +15,7 @@ pub const MAX_TOOL_RESULT_BYTES: usize = 64 * 1024;
 pub const MAX_CUMULATIVE_TOOL_OUTPUT_BYTES: usize = 256 * 1024;
 pub const MAX_TOOL_ARGUMENTS_BYTES: usize = 64 * 1024;
 
+pub const TOOL_DISCOVER_GAME_PROJECTS: &str = "discover_game_projects";
 pub const TOOL_LIST_SHAREABLE_PROJECTS: &str = "list_shareable_projects";
 pub const TOOL_LIST_PROJECT_DIRECTORY: &str = "list_project_directory";
 pub const TOOL_READ_FILE_CHUNK: &str = "read_file_chunk";
@@ -33,6 +36,29 @@ pub struct FunctionDefinition {
 
 pub fn get_chat_tools() -> Vec<ToolDefinition> {
     vec![
+        ToolDefinition {
+            tool_type: "function".to_string(),
+            function: FunctionDefinition {
+                name: TOOL_DISCOVER_GAME_PROJECTS.to_string(),
+                description: "Scans approved and share-enabled project roots to discover game projects (Unity, Godot, Unreal). Returns identified game projects with engine details, evidence markers, and bounded coverage metadata.".to_string(),
+                parameters: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "project_root": {
+                            "type": "string",
+                            "description": "Optional approved project root path to scan. If omitted, scans all approved roots that currently have provider sharing enabled."
+                        },
+                        "max_depth": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 8,
+                            "description": "Maximum directory traversal depth (default 4, maximum 8)."
+                        }
+                    },
+                    "additionalProperties": false
+                }),
+            },
+        },
         ToolDefinition {
             tool_type: "function".to_string(),
             function: FunctionDefinition {
@@ -193,6 +219,17 @@ struct ReadFileChunkArgs {
 /// Errors are serialized as structured JSON error responses for the model.
 pub fn execute_tool(config_dir: &Path, name: &str, arguments_json: &str) -> String {
     match name {
+        TOOL_DISCOVER_GAME_PROJECTS => {
+            match discover_game_projects_impl(config_dir, arguments_json) {
+                Ok(res) => serde_json::to_string(&res).unwrap_or_else(|_| {
+                    "{\"error\":\"Failed to serialize discovery result.\"}".to_string()
+                }),
+                Err(e) => serde_json::to_string(&serde_json::json!({
+                    "error": e
+                }))
+                .unwrap_or_else(|_| "{\"error\":\"Game project discovery rejected.\"}".to_string()),
+            }
+        }
         TOOL_LIST_SHAREABLE_PROJECTS => match get_shareable_project_roots_impl(config_dir) {
             Ok(projects) => serde_json::to_string(&serde_json::json!({
                 "projects": projects
@@ -338,6 +375,119 @@ pub fn reauthorize_tool_result(
                 .unwrap();
             }
         }
+        TOOL_DISCOVER_GAME_PROJECTS => {
+            reauthorize_discovery_result(config_dir, result_content);
+        }
         _ => {}
+    }
+}
+
+/// Generates a truthful, non-sensitive summary for an in-flight tool call.
+/// Never leaks raw arguments, file contents, or secret paths.
+pub fn safe_running_summary(tool_name: &str) -> String {
+    match tool_name {
+        TOOL_DISCOVER_GAME_PROJECTS => "Discovering game projects in approved folders".to_string(),
+        TOOL_LIST_SHAREABLE_PROJECTS => "Checking shareable project roots".to_string(),
+        TOOL_LIST_PROJECT_DIRECTORY => "Inspecting project directory".to_string(),
+        TOOL_READ_FILE_CHUNK => "Reading file chunk".to_string(),
+        _ => format!("Executing {tool_name}"),
+    }
+}
+
+/// Inspects the tool execution JSON output to determine whether it succeeded or failed,
+/// and produces a safe, non-sensitive summary for the UI tool activity event.
+/// Never marks structured errors as success.
+pub fn summarize_tool_output(tool_name: &str, output_json: &str) -> (ToolActivityStatus, String) {
+    if let Ok(v) = serde_json::from_str::<serde_json::Value>(output_json) {
+        if let Some(err) = v.get("error").and_then(|e| e.as_str()) {
+            let safe_err = if err.contains("Access denied")
+                || err.contains("not permitted")
+                || err.contains("blocked")
+                || err.contains("outside")
+            {
+                "Access denied or restricted path".to_string()
+            } else if err.contains("budget") || err.contains("exceeded") || err.contains("limit") {
+                "Tool budget exceeded".to_string()
+            } else if err.contains("Invalid arguments") || err.contains("malformed") {
+                "Invalid tool arguments".to_string()
+            } else if err.contains("not found") || err.contains("does not exist") {
+                "Target not found".to_string()
+            } else {
+                "Tool execution failed".to_string()
+            };
+            return (ToolActivityStatus::Failed, safe_err);
+        }
+
+        match tool_name {
+            TOOL_DISCOVER_GAME_PROJECTS => {
+                let count = v
+                    .get("projects")
+                    .and_then(|p| p.as_array())
+                    .map(|a| a.len())
+                    .unwrap_or(0);
+                let coverage = v
+                    .get("coverage")
+                    .and_then(|c| c.as_str())
+                    .unwrap_or("complete");
+                if coverage == "partial" {
+                    (
+                        ToolActivityStatus::Succeeded,
+                        format!("Found {count} game project(s) (partial scan)"),
+                    )
+                } else {
+                    (
+                        ToolActivityStatus::Succeeded,
+                        format!("Found {count} game project(s)"),
+                    )
+                }
+            }
+            TOOL_LIST_SHAREABLE_PROJECTS => {
+                let count = v
+                    .get("projects")
+                    .and_then(|p| p.as_array())
+                    .map(|a| a.len())
+                    .unwrap_or(0);
+                (
+                    ToolActivityStatus::Succeeded,
+                    format!("Found {count} shareable root(s)"),
+                )
+            }
+            TOOL_LIST_PROJECT_DIRECTORY => {
+                let count = v
+                    .get("entries")
+                    .and_then(|e| e.as_array())
+                    .map(|a| a.len())
+                    .unwrap_or(0);
+                (
+                    ToolActivityStatus::Succeeded,
+                    format!("Listed {count} item(s)"),
+                )
+            }
+            TOOL_READ_FILE_CHUNK => {
+                let bytes = v
+                    .get("text")
+                    .and_then(|t| t.as_str())
+                    .map(|s| s.len())
+                    .unwrap_or(0);
+                let eof = v.get("eof").and_then(|e| e.as_bool()).unwrap_or(false);
+                if eof {
+                    (
+                        ToolActivityStatus::Succeeded,
+                        format!("Read {bytes} bytes (reached EOF)"),
+                    )
+                } else {
+                    (ToolActivityStatus::Succeeded, format!("Read {bytes} bytes"))
+                }
+            }
+            _ => (
+                ToolActivityStatus::Succeeded,
+                "Tool executed successfully".to_string(),
+            ),
+        }
+    } else {
+        (
+            ToolActivityStatus::Failed,
+            "Malformed tool output".to_string(),
+        )
     }
 }

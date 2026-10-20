@@ -55,6 +55,29 @@ The native chat streaming pipeline (`execute_chat_stream`) integrates an OpenAI-
 read-only tool-calling loop governed by strict containment, budgeting, and provider-sharing rules:
 
 - **Available tools**:
+  - `discover_game_projects`: scans approved, share-enabled project roots using bounded
+    breadth-first traversal to discover game projects without requiring manual subfolder drilling.
+    - Supported engines:
+      - **Unity**: identified by `ProjectSettings/ProjectVersion.txt` (regular file) AND `Assets` (directory).
+        Extracts `m_EditorVersion` if present.
+      - **Godot**: identified by `project.godot` (regular file). Extracts `config/name` and `config_version`.
+      - **Unreal**: identified by `*.uproject` (regular file). Extracts project name from file stem and
+        `EngineAssociation` from JSON metadata.
+    - Exclusions & containment:
+      - Traverses only currently share-enabled approved project roots.
+      - Never crosses symlinks, NTFS junctions, or reparse points.
+      - Automatically excludes common build/cache folders (`Library`, `Temp`, `Obj`, `Build`, `DerivedDataCache`,
+        `Intermediate`, `Binaries`, `Saved`, `.godot`, `.import`, `target`, `bin`, `node_modules`, `dist`, `.git`, `.vs`).
+      - Automatically blocks secret and system folders (`.ssh`, `.gnupg`, `.config`, AppData, etc.) and credential files.
+      - Recursion halts at discovered project boundaries (does not scan inside game asset or cache subtrees).
+    - Traversal bounds & metadata:
+      - Defaults to `max_depth: 4`, clamped between 1 and 8 (`MAX_ALLOWED_DEPTH`).
+      - Traversal stops if `MAX_DIRECTORIES_SCANNED` (1000), `MAX_DISCOVERED_PROJECTS` (50), or
+        `MAX_SCAN_DURATION` (5s) is reached.
+      - Deterministic alphabetical directory ordering for reproducible results.
+      - Emits explicit coverage metadata: `coverage: "complete" | "partial"`, `truncated: bool`,
+        `limitsReached: ["max_depth" | "max_directories" | "max_results" | "timeout" | "revoked_grant"]`,
+        and `directoriesScanned: usize`. Never makes false exhaustive claims.
   - `list_shareable_projects`: returns approved project roots that currently have explicit
     provider-sharing grants enabled.
   - `list_project_directory`: returns files and subdirectories within a granted root.
@@ -66,17 +89,50 @@ read-only tool-calling loop governed by strict containment, budgeting, and provi
   - No writes, shell execution, search/indexing, ungranted uploads, or background inference.
   - Reauthorization before send: immediately before any tool result payload crosses the
     network boundary to the provider, `reauthorize_tool_result` rechecks active root grants.
-    If a user revoked sharing while execution was in flight, the pending content is purged
-    and replaced with an authorization error.
+    For `discover_game_projects`, results from any root whose sharing was revoked are pruned,
+    flagged with `limitsReached: ["revoked_grant"]`, and if all roots were revoked, replaced
+    with an authorization error before crossing the network.
   - Untrusted data framing: tool outputs and file text are sent with `role: "tool"` and
     treated strictly as data, never as prompt instruction overrides.
-- **Budgeting & bounds**:
+- **Observable tool activity contract**:
+  - Streaming payload extension: `ChatStreamPayload` compatibly includes an optional `toolActivity` field:
+    ```json
+    {
+      "requestId": "string",
+      "conversationId": "string",
+      "delta": null,
+      "done": null,
+      "status": null,
+      "error": null,
+      "toolActivity": {
+        "id": "call_123",
+        "name": "discover_game_projects",
+        "status": "running" | "succeeded" | "failed",
+        "summary": "Found 2 game project(s)"
+      }
+    }
+    ```
+  - `status` values:
+    - `"running"`: emitted immediately when tool call execution begins.
+    - `"succeeded"`: emitted when tool call finishes with non-error payload.
+    - `"failed"`: emitted on tool errors, malformed JSON, authorization rejection, or cancellation.
+      Structured errors (e.g. `{"error": "..."}`) are strictly marked `"failed"`, never `"succeeded"`.
+  - Privacy: `summary` contains high-level safe progress descriptions without raw tool arguments,
+    file contents, or secret paths.
+- **Budgeting, bounds & graceful exhaustion**:
   - Maximum 5 tool rounds per user turn (`MAX_TOOL_ROUNDS`).
   - Maximum 8 tool calls per round (`MAX_TOOLS_PER_ROUND`).
   - Maximum 16 cumulative tool calls per user turn (`MAX_TOTAL_TOOL_CALLS`).
   - Maximum 64 KiB per tool result (`MAX_TOOL_RESULT_BYTES`).
   - Maximum 256 KiB cumulative tool output per user turn (`MAX_CUMULATIVE_TOOL_OUTPUT_BYTES`).
   - Maximum 64 KiB tool call arguments delta (`MAX_TOOL_ARGUMENTS_BYTES`).
+  - **Graceful synthesis round on budget exhaustion**:
+    When tool round (`MAX_TOOL_ROUNDS`) or tool call count limits are exhausted, the loop does NOT
+    fail abruptly or fabricate success. Instead, it dispatches one final synthesis round with
+    `tools: None`, instructing the model to synthesize a response using the partial results
+    gathered so far. If the model attempts to emit further tool calls without producing text,
+    it terminates with a truthful failure rather than claiming false success.
+    The synthesis round is fully cancellable.
 - **History nonpersistence**:
   - Stored conversation history on disk retains only user and terminal assistant text messages.
     Transient tool calls, arguments, and file chunks are never persisted to conversation files,
