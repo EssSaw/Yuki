@@ -9,7 +9,8 @@ Read selectively; each topic has one authoritative home.
 - [Workspace storage](architecture/workspace-storage.md): implemented folder settings, access boundaries and limits.
 - [Chat integration](architecture/chat.md): 9router slice, privacy boundaries and acceptance.
 - [Local notes](architecture/notes.md): explicit saving, conflict protection and recovery limits.
-- [Agent mode](architecture/agent-mode.md): conversation scope and preparatory grants; execution remains unavailable.
+- [Agent mode](architecture/agent-mode.md): conversation scope and preparatory grants.
+- [Local text edits](architecture/text-edits.md): guarded user-operated edits, Undo and recovery limits; chat tools remain read-only.
 - [Unity MCP discovery](architecture/unity-mcp.md): local candidates and endpoint approval, not connected editor tools.
 - [Integration research](research/integrations.md): primary sources and unverified assumptions.
 - [Current handoff](handoff.md): execution state, checks and next action.

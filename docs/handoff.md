@@ -1,5 +1,76 @@
 # Current handoff
 
+## Guarded local edit integration (2026-10-21)
+
+Implemented native user-operated Prepare/Apply/Undo/Stop/Discard/recovery IPC and Hard UI
+panel in Agent controls. Idle-chat activity lock serializes mutation against chat/task
+changes; mode persistence rechecks same lock. Stop generation survives queued workers.
+No model edit tools added: chat is still read-only. Existing UTF-8 files <=1MiB only,
+replacement preview is not a diff. In-place writes are not crash-atomic; recovery is
+conservative and never replays uncertain mutations. See architecture/text-edits.md.
+All 173 native and 110 frontend tests passed, cargo fmt --check, frontend and Windows
+native release builds passed. No real personal files or provider calls used. Manual
+local-edit/Undo/Stop/recovery and rendered narrow acceptance pending. First desktop
+acceptance must use disposable files. Next approved work remains AI edit integration
+under standing write grants with fresh task/grant checks and truthful activity.
+
+
+## Recovery validation and reservation (2026-10-21)
+
+Recovery inventory now parses bounded record contents, validates schema/IDs/states/paths/
+UTF-8 and verifies later stages agree with the prepared before/after image. Corrupt or
+mismatched content blocks normal inventory/Undo and preserves files for review. Quota
+accounts for four complete lifecycle records per change before Apply; no automatic backup
+eviction. Logical quota reservation does NOT reserve real OS disk space or guarantee
+power-loss durability. Added corrupt-stage/tamper and quota-before-mutation regressions.
+All 171 native tests pass; 9 focused edits tests pass; cargo fmt --check passes.
+No Tauri edit commands/model tools/UI exposed, no commit. Next: finish mutation/Stop and
+conversation scope synchronization, recovery status IPC, then consistent Hard UI and
+chat-tool integration. Existing Apply is in-place (not crash-atomic); never claim otherwise.
+
+
+## Recoverable edit safety pass (2026-10-21)
+
+Added opened-file hard-link count rejection, pre-mutation cancellation callback, and
+metadata-only recovery inventory distinguishing uncertain Apply/Undo without replay.
+Seven focused edits tests pass: apply/undo/conflicts/task change plus recovery-directory
+failure, corrupt commit rejection, hard links, competing write/directory rename exclusion,
+cancellation and prepared-only status. These are not forced-power-loss tests. Inventory
+currently summarizes record filenames; record-content validation/reconciliation and quota
+reservation for all commit/undo stages still need hardening before user-facing exposure.
+No Tauri edit commands, model tools or UI added; partial changes remain uncommitted.
+
+## Recoverable edit native progress (2026-10-21)
+
+Added native-only Apply/Undo helpers with Windows directory handles held against rename,
+exclusive target handle, final-path/reparse/attribute verification, exact original-byte
+checks, generation/grant/task-revision revalidation and before/after recovery records.
+Writes are in-place through the held handle, NOT crash-atomic replacement: interruption
+can leave partial content. Prepared records remain for manual recovery; no automatic
+replay. Undo refuses external conflicts and repeats; recovery quota refuses rather than
+evicting backups. Added persisted task_revision for proposal invalidation. All 164 native
+tests pass including isolated apply/undo, conflict and task-change checks.
+Still incomplete: recovery-status/reconciliation UI, failure-injection and concurrent
+mutation tests, hard-link/file-identity checks, Stop/active-request synchronization,
+Tauri edit commands and chat integration. No edit commands/tools are exposed. Do not
+claim a finished safe executor or enable writes before closing those gaps. Changes
+uncommitted. Hard UI required once stable IPC/recovery contracts exist.
+
+## Recoverable edits work in progress
+
+User approved parent-native implementation after Coding routing failure; Hard UI remains
+required for UI. Research recommends Windows handle-verified apply/undo with durable
+before-images; do not mistake canonicalize/open for safe mutation. Parent added new
+edits module with native-only, non-mutating bounded proposal/revalidation/discard helpers
+and isolated tests. No Tauri edit commands, provider tools, writes, apply/undo or UI are
+exposed. Apply availability is explicitly false. Existing UTF-8 files up to 1 MiB only;
+BOM/CRLF and exact original-byte conflict checks. This is incomplete groundwork, not
+finished executor. Focused cargo test edits:: is still running in shell edit-proposal-tests;
+completion retrieved: both focused proposal tests passed (162 other tests filtered out).
+This is targeted validation, not a full-suite run. Changes uncommitted. Next implement
+stable task identity plus Windows handle/recovery mutation boundary before enabling edits.
+
+
 ## Agent foundation integration (2026-10-20)
 
 Completed retained native work directly after Coding provider routing failed, per user

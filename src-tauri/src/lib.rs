@@ -1,4 +1,5 @@
 pub mod chat;
+pub mod edits;
 pub mod mcp;
 pub mod notes;
 pub mod workspace;
@@ -9,6 +10,7 @@ pub fn run() {
     let mcp_state = mcp::session::McpSessionManager::default();
 
     tauri::Builder::default()
+        .manage(std::sync::Arc::new(edits::commands::EditState::default()))
         .manage(chat_state)
         .manage(mcp_state)
         .invoke_handler(tauri::generate_handler![
@@ -25,6 +27,12 @@ pub fn run() {
             workspace::commands::revoke_agent_write_root,
             workspace::commands::create_agent_command_template,
             workspace::commands::revoke_agent_command_template,
+            edits::commands::prepare_local_text_edit,
+            edits::commands::apply_local_text_edit,
+            edits::commands::undo_local_text_edit,
+            edits::commands::stop_local_text_edit,
+            edits::commands::discard_local_text_edit,
+            edits::commands::list_local_edit_recovery,
             notes::commands::create_note,
             notes::commands::list_notes,
             notes::commands::load_note,

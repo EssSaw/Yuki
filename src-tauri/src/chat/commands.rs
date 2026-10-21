@@ -356,11 +356,21 @@ pub async fn set_conversation_mode(
     };
 
     let cid = conversation_id.clone();
+    let chat_state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
+        let active = chat_state
+            .inner
+            .active
+            .lock()
+            .map_err(|_| "Chat state unavailable")?;
+        if active.is_some() {
+            return Err("Cannot change task scope during active chat".to_string());
+        }
         let mut conv = load_conversation_from_disk(&data_root, &cid)?;
         conv.mode = mode;
         conv.task_root = validated_task_root;
         conv.task_description = validated_desc;
+        conv.task_revision = uuid::Uuid::new_v4().to_string();
         conv.updated_at = chrono::Utc::now().to_rfc3339();
         save_conversation_atomic(&data_root, &conv)?;
         Ok(conv)
@@ -484,10 +494,12 @@ pub async fn start_chat(
                 mode: effective_mode,
                 task_root: val_task_root,
                 task_description: val_task_desc,
+                task_revision: uuid::Uuid::new_v4().to_string(),
             }
         } else {
             let mut existing = load_conversation_from_disk(&data_root_clone, &cid_clone)?;
             if let Some(m) = mode {
+                existing.task_revision = uuid::Uuid::new_v4().to_string();
                 match m {
                     ConversationMode::Agent => {
                         let tr = task_root

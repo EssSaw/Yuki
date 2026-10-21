@@ -6,9 +6,11 @@ Chat and Agent are explicit conversation modes. Legacy conversations default to 
 Agent setup selects an approved project and optional task description; mode/root metadata
 is not appended to provider message text. Existing read tools remain unchanged.
 
-This slice does not implement project-file writes, command execution or Unity mutations.
-The UI states that execution is unavailable. Saved grants are preparatory authorization
-records, not a working executor or OS sandbox. No task resumes automatically on restart.
+Agent chat tools do not implement project-file writes, command execution or Unity mutations.
+A separate [local text editor](text-edits.md) now supports explicit user-operated guarded
+Apply/Undo under write grants. The general execution flag remains false: it must not be
+interpreted as autonomous command or Unity capability. Grants are not an OS sandbox.
+No task resumes automatically on restart.
 
 ## Grants and state
 

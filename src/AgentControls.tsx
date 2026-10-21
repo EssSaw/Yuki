@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import "./AgentControls.css";
+import TextEditPanel from "./TextEditPanel";
 
 export type AgentContext = { mode: "chat" | "agent"; taskRoot?: string; taskDescription?: string };
 export const CHAT_CONTEXT: AgentContext = { mode: "chat" };
@@ -22,10 +23,11 @@ export default function AgentControls({ desktop, disabled, conversationId, value
   const [roots, setRoots] = useState<string[]>([]);
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
   const [busy, setBusy] = useState(false);
+  const [editBusy, setEditBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [review, setReview] = useState<{ kind: "approve" | "revoke"; id?: string; path: string } | null>(null);
   const epoch = useRef(0);
-  const locked = !desktop || disabled || busy;
+  const locked = !desktop || disabled || busy || editBusy;
   const projectRoot = value.taskRoot;
 
   useEffect(() => { setDraft(value); setReview(null); }, [value]);
@@ -96,7 +98,7 @@ export default function AgentControls({ desktop, disabled, conversationId, value
         </>}
         <button type="button" disabled={draft.mode === "agent" && !roots.includes(draft.taskRoot ?? "")} onClick={() => void applyContext()}>Apply mode &amp; task</button>
       </fieldset>
-      <p>Execution unavailable. Agent mode records intent only. Approving a write root does not enable edits yet.</p>
+      <p>Model execution, commands and Unity actions are unavailable. Manual local text edits use a separately reviewed replacement and an approved write root.</p>
       <p>Provider sharing is separate from write permission and uses existing project sharing grants.</p>
       {snapshot ? <div className="agent-permissions">
         <p>Permission revision {snapshot.generation} · Provider sharing: {snapshot.providerSharingEnabled ? "approved" : "not approved"}</p>
@@ -114,6 +116,10 @@ export default function AgentControls({ desktop, disabled, conversationId, value
         <button type="button" disabled={locked} onClick={() => void changeGrant()}>Confirm {review.kind === "approve" ? "approval" : "revocation"}</button>
       </section>}
       {error && <p role="alert">{error}</p>}
+      <TextEditPanel desktop={desktop} disabled={disabled || busy} conversationId={value.mode === "agent" ? conversationId : null}
+        taskRoot={value.mode === "agent" && snapshot?.isTaskRootApproved ? projectRoot : undefined}
+        taskDescription={value.taskDescription} generation={snapshot?.generation} grants={snapshot?.writeRoots ?? []}
+        onBusy={(next) => { setEditBusy(next); onBusy(next); }} />
     </details>
   </section>;
 }

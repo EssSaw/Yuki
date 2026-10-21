@@ -68,6 +68,8 @@ pub struct ConversationSummary {
     pub task_root: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub task_description: Option<String>,
+    #[serde(default)]
+    pub task_revision: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -84,6 +86,8 @@ pub struct ConversationDetail {
     pub task_root: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub task_description: Option<String>,
+    #[serde(default)]
+    pub task_revision: String,
 }
 
 impl ConversationDetail {
@@ -101,6 +105,7 @@ impl ConversationDetail {
             mode: ConversationMode::Chat,
             task_root: None,
             task_description: None,
+            task_revision: String::new(),
         }
     }
 }
