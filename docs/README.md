@@ -2,6 +2,8 @@
 
 Read selectively; each topic has one authoritative home.
 
+- [Coordinator/subagent playbook](../agent-starter/coordinator-workflow.md): reusable startup prompt, model routing, parallel ownership and delivery workflow.
+
 - [Product scope](product/scope.md): confirmed intent, future scope and open questions.
 - [Visual direction](product/visual-direction.md): Watercolor Sketchbook design decisions and UI skill guidance.
 - [System boundaries](architecture/boundaries.md): proposed architecture and safety contracts.
